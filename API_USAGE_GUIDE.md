@@ -161,7 +161,27 @@ with open("your_image.jpg", "rb") as f:
 
 ```json
 {
-  "marked_image_path": "result/image_marked_answers.png",
+  "marked_image_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+  "student_answers": {
+    "part1": {
+      "1": "A",
+      "2": "B",
+      "3": "C"
+    },
+    "part2": {
+      "1a": "D",
+      "1b": "D",
+      "1c": "S",
+      "1d": "S",
+      "2a": "D",
+      "2b": "S"
+    },
+    "part3": {
+      "1": "-3,2",
+      "2": "123",
+      "3": "1384"
+    }
+  },
   "summary": {
     "total_questions": { "part1": 5, "part2": 2, "part3": 2 },
     "marked_circles": { "part1": 5, "part2": 8, "part3": 3 },
@@ -180,3 +200,12 @@ with open("your_image.jpg", "rb") as f:
   "message": "Đánh dấu đáp án đúng thành công"
 }
 ```
+
+## Giải thích kết quả:
+
+- **`marked_image_base64`**: Ảnh đã được đánh dấu dưới dạng base64, có thể hiển thị trực tiếp trong HTML/web
+- **`student_answers`**: Đáp án học sinh đã tô theo format:
+  - Part 1: `"1": "A"`, `"2": "B"`, ...
+  - Part 2: `"1a": "D"`, `"1b": "D"`, `"1c": "S"`, `"1d": "S"`, ...
+  - Part 3: `"1": "-3,2"`, `"2": "123"`, ... (đã ghép từ trái sang phải)
+- **`summary`**: Thống kê chi tiết về việc đánh dấu

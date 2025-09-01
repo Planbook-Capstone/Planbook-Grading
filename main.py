@@ -220,6 +220,7 @@ async def detect_circles_endpoint(file: UploadFile = File(..., description="Imag
         response_data = {
             "all_answers": detection_results.get("all_answers", []),
             "student_answers": detection_results.get("student_answers", []),
+            "student_id": detection_results.get("student_id", ""),
             "debug_image_path": debug_image_path
         }
 
@@ -284,8 +285,8 @@ async def mark_correct_answers_endpoint(
         with open(file_path, "wb") as buffer:
             buffer.write(await file.read())
 
-        # Đánh dấu đáp án đúng lên ảnh
-        marked_image_path = mark_correct_answers_on_image(
+        # Đánh dấu đáp án đúng lên ảnh và lấy đáp án học sinh
+        base64_image, student_data = mark_correct_answers_on_image(
             file_path, 
             final_answers, 
             output_dir="result"
@@ -294,11 +295,13 @@ async def mark_correct_answers_endpoint(
         # Tạo summary thông tin
         detection_results, _ = detect_circles(file_path, debug=False)
         all_circles = detection_results.get("all_answers", [])
-        student_answers = detection_results.get("student_answers", [])
-        summary = create_answer_summary(final_answers, all_circles, student_answers)
+        student_answers_raw = detection_results.get("student_answers", [])
+        summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
 
         response_data = {
-            "marked_image_path": marked_image_path,
+            "marked_image_base64": base64_image,
+            "student_answers": student_data["student_answers"],
+            "student_id": student_data["student_id"],
             "summary": summary,
             "message": "Đánh dấu đáp án đúng thành công"
         }

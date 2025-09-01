@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 import json
+import base64
 from typing import Dict, List, Any, Tuple
 from api.circle_detection_service import detect_circles
 
@@ -87,6 +88,94 @@ def parse_part3_answer(question_num: str, answer_str: str) -> List[str]:
     return patterns
 
 
+def image_to_base64(image_array: np.ndarray) -> str:
+    """
+    Chuyển đổi ảnh numpy array thành base64 string
+    
+    Args:
+        image_array: NumPy array của ảnh
+        
+    Returns:
+        Base64 string của ảnh
+    """
+    # Encode ảnh thành PNG
+    _, buffer = cv2.imencode('.png', image_array)
+    # Chuyển thành base64
+    img_base64 = base64.b64encode(buffer).decode('utf-8')
+    return f"data:image/png;base64,{img_base64}"
+
+
+def parse_student_answers(student_answers: List[str]) -> Dict[str, Dict[str, str]]:
+    """
+    Parse đáp án học sinh từ circle labels thành format mong muốn
+    
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        
+    Returns:
+        Dict chứa đáp án học sinh theo format: {"part1": {"1": "A"}, "part2": {"1a": "D"}, "part3": {"1": "-3,2"}}
+    """
+    result = {
+        "part1": {},
+        "part2": {},
+        "part3": {}
+    }
+    
+    # Tạo dict tạm để nhóm part3 theo câu hỏi và vị trí
+    part3_temp = {}
+    
+    for answer in student_answers:
+        parts = answer.split("_")
+        if len(parts) < 4:
+            continue
+            
+        part = parts[0]  # part1, part2, part3
+        question_num = parts[1]  # số câu hỏi
+        
+        if part == "part1":
+            # Format: part1_1_a_x_y -> "1": "A"
+            if len(parts) >= 5:
+                answer_choice = parts[2].upper()
+                result["part1"][question_num] = answer_choice
+                
+        elif part == "part2":
+            # Format: part2_1_a_D_x_y -> "1a": "D"
+            if len(parts) >= 6:
+                sub_part = parts[2]  # a, b, c, d
+                choice = parts[3]    # D hoặc S
+                key = f"{question_num}{sub_part}"
+                result["part2"][key] = choice
+                
+        elif part == "part3":
+            # Format: part3_1_3_2_x_y -> cần ghép lại thành số
+            if len(parts) >= 6:
+                symbol = parts[2]    # minus, comma, hoặc số
+                position = parts[3]  # vị trí trong câu trả lời
+                
+                if question_num not in part3_temp:
+                    part3_temp[question_num] = {}
+                
+                # Chuyển đổi symbol thành ký tự thực tế
+                if symbol == "minus":
+                    char = "-"
+                elif symbol == "comma":
+                    char = ","
+                elif symbol.isdigit():
+                    char = symbol
+                else:
+                    continue
+                
+                part3_temp[question_num][int(position)] = char
+    
+    # Ghép lại part3 theo thứ tự vị trí
+    for question_num, positions in part3_temp.items():
+        sorted_positions = sorted(positions.keys())
+        answer_str = "".join(positions[pos] for pos in sorted_positions)
+        result["part3"][question_num] = answer_str
+    
+    return result
+
+
 def find_matching_circles(all_circles: List[str], target_patterns: List[str]) -> List[str]:
     """
     Tìm các circle labels từ all_circles khớp với target_patterns
@@ -131,9 +220,9 @@ def extract_coordinates_from_label(circle_label: str) -> Tuple[int, int]:
     return 0, 0
 
 
-def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, Any], output_dir: str = "result") -> str:
+def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, Any], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
     """
-    Đánh dấu đáp án đúng lên ảnh
+    Đánh dấu đáp án đúng lên ảnh và trả về ảnh base64 + đáp án học sinh + student ID
     
     Args:
         image_path: Đường dẫn ảnh đầu vào
@@ -141,11 +230,8 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
         output_dir: Thư mục đầu ra
         
     Returns:
-        Đường dẫn ảnh đã đánh dấu
+        Tuple (base64_image, response_data)
     """
-    # Tạo thư mục output nếu chưa có
-    os.makedirs(output_dir, exist_ok=True)
-    
     # Đọc ảnh
     image = cv2.imread(image_path)
     if image is None:
@@ -155,6 +241,10 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
     detection_results, _ = detect_circles(image_path, debug=False)
     all_circles = detection_results.get("all_answers", [])
     student_answers = detection_results.get("student_answers", [])  # Đáp án học sinh đã tô
+    student_id = detection_results.get("student_id", "")  # ID học sinh
+    
+    # Parse đáp án học sinh theo format mong muốn
+    student_answers_formatted = parse_student_answers(student_answers)
     
     # Parse đáp án đúng
     marked_circles_patterns = parse_correct_answers(correct_answers)
@@ -176,23 +266,24 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
             if circle_label in student_answers:
                 # Học sinh đã tô đúng -> màu xanh lá cây
                 color = (0, 255, 0)  # Green
-      
             else:
                 # Học sinh chưa tô hoặc tô sai -> màu đỏ  
                 color = (0, 0, 255)  # Red
-         
             
             # Vẽ vòng tròn với màu tương ứng
-            cv2.circle(marked_image, (x, y), 10, color, 2)
-  
-           
+            cv2.circle(marked_image, (x, y), 12, color, 3)
+
     
-    # Lưu ảnh đã đánh dấu
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    output_path = os.path.join(output_dir, f"{base_name}_marked_answers.png")
-    cv2.imwrite(output_path, marked_image)
+    # Chuyển ảnh thành base64
+    base64_image = image_to_base64(marked_image)
     
-    return output_path
+    # Tạo response data bao gồm student_answers và student_id
+    response_data = {
+        "student_answers": student_answers_formatted,
+        "student_id": student_id
+    }
+    
+    return base64_image, response_data
 
 
 def create_answer_summary(correct_answers: Dict[str, Any], all_circles: List[str], student_answers: List[str] = None) -> Dict[str, Any]:

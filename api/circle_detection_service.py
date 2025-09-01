@@ -88,7 +88,103 @@ def _process_part3_circles(all_circles, filled_circles, part_number, debug_image
 
     return output_data, student_answers
 
+def _process_id_student_circles(all_circles, filled_circles, debug_image):
+    """
+    Process student ID circles and parse them into a student ID number
+    Returns the student ID as a string of digits from left to right
+    """
+    output_data = []
+    student_answers = []
+    filled_circles_set = set((x, y) for x, y, r in filled_circles)
+
+    # Group circles by approximate column (digit position) based on x coordinates
+    columns = [[] for _ in range(8)]  # Assuming max 8 digits for student ID
+    
+    # Sort circles by x coordinate to determine columns
+    sorted_by_x = sorted(all_circles, key=lambda c: c[0])
+    
+    if not sorted_by_x:
+        return [], [], ""
+    
+    # Determine column boundaries based on x coordinates
+    min_x = sorted_by_x[0][0]
+    max_x = sorted_by_x[-1][0]
+    column_width = (max_x - min_x) / 7 if len(sorted_by_x) > 1 else 50  # Divide into columns
+    
+    for x, y, r in all_circles:
+        # Determine which column (digit position) this circle belongs to
+        col_idx = int((x - min_x) / column_width)
+        col_idx = max(0, min(7, col_idx))  # Ensure within bounds
+        columns[col_idx].append((x, y, r))
+
+    student_id_digits = [""] * 8  # Initialize with empty strings
+    
+    # Process each column (digit position)
+    for col_idx, column_circles in enumerate(columns):
+        if not column_circles:
+            continue
+            
+        # Sort by y coordinate to get rows (digits 0-9)
+        sorted_circles = sorted(column_circles, key=lambda c: c[1])
+        
+        for x, y, r in sorted_circles:
+            # Determine which digit (0-9) based on y coordinate
+            # Assuming digits are arranged vertically from 0 to 9
+            digit = _get_digit_from_y_coordinate(y)
+            
+            # Generate label for this circle
+            label = f"id_student_{col_idx+1}_{digit}_{x}_{y}"
+            output_data.append(label)
+            
+            is_filled = (x, y) in filled_circles_set
+            if is_filled:
+                student_answers.append(label)
+                student_id_digits[col_idx] = str(digit)  # Store the filled digit
+            
+            if debug_image is not None:
+                color = (0, 0, 255) if is_filled else (0, 255, 0)
+                cv2.circle(debug_image, (x, y), r, color, 2)
+                cv2.putText(debug_image, f"ID{col_idx+1}_{digit}", (x - 15, y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 255), 1)
+    
+    # Construct student ID from filled digits (left to right)
+    student_id = "".join(student_id_digits).rstrip()  # Remove trailing empty strings
+    
+    return output_data, student_answers, student_id
+
+
+def _get_digit_from_y_coordinate(y_coord):
+    """
+    Determine which digit (0-9) based on y coordinate
+    Assumes digits are arranged vertically in order 0,1,2,3,4,5,6,7,8,9
+    """
+    # These values may need adjustment based on actual image layout
+    base_y = 100  # Approximate y coordinate of digit 0
+    digit_spacing = 24  # Approximate spacing between digits
+    
+    digit = int((y_coord - base_y) / digit_spacing)
+    return max(0, min(9, digit))  # Ensure digit is between 0-9
+
+
 def _get_part3_symbol_label(pos_idx, y_coord):
+    """
+    Generate the symbol/digit label for Part 3 based on position and y coordinate
+    Returns labels like: minus, comma_1, comma_2, 0_1, 0_2, 1_1, etc.
+    """
+    # Determine symbol/digit based on y coordinate
+    if y_coord < 1280:  # Minus row
+        if pos_idx == 0:  # Only first position has minus
+            return f"minus_{pos_idx+1}"
+
+    elif y_coord < 1310:  # Comma row
+        if pos_idx in [0, 1]:  # Middle positions have comma
+            return f"comma_{pos_idx+2}"
+        
+    else:  # Digit rows (0-9)
+        # Calculate which digit based on y coordinate
+        digit = max(0, min(9, (y_coord - 1315) // 24))
+        position = pos_idx + 1  # Convert to 1-4
+        return f"{digit}_{position}"
     """
     Generate the symbol/digit label for Part 3 based on position and y coordinate
     Returns labels like: minus, comma_1, comma_2, 0_1, 0_2, 1_1, etc.
@@ -247,6 +343,7 @@ def detect_circles(image_path, debug=False):
         raise ValueError(f"Could not read image from {image_path}")
 
     # Define ROIs
+    roi_part_id_student = (1050, 80, 750, 230)  # ROI for student ID section
     roi_part1 = (200, 680, 1200, 950)
     roi_part2 = (200, 990, 1200, 1163)
     roi_part3 = (200, 1220, 1110, 1558) # Adjusted coordinates for Part 3
@@ -254,6 +351,17 @@ def detect_circles(image_path, debug=False):
     debug_image = image.copy() if debug else None
     all_answers = []
     student_answers = []
+    student_id = ""
+
+    # Process Student ID
+    if debug:
+        cv2.rectangle(debug_image, (roi_part_id_student[0], roi_part_id_student[1]), (roi_part_id_student[2], roi_part_id_student[3]), (255, 255, 0), 2)
+        cv2.putText(debug_image, "Student ID ROI", (roi_part_id_student[0], roi_part_id_student[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+    id_all_circles, id_filled_circles = _detect_circles_in_roi(image, roi_part_id_student)
+    id_data, id_student_answers, student_id = _process_id_student_circles(id_all_circles, id_filled_circles, debug_image)
+    all_answers.extend(id_data)
+    student_answers.extend(id_student_answers)
 
     # Process Part 1
     if debug:
@@ -293,4 +401,4 @@ def detect_circles(image_path, debug=False):
         debug_image_path = os.path.join(output_dir, f"{base_name}_circles_debug.png")
         cv2.imwrite(debug_image_path, debug_image)
 
-    return {"all_answers": all_answers, "student_answers": student_answers}, debug_image_path
+    return {"all_answers": all_answers, "student_answers": student_answers, "student_id": student_id}, debug_image_path
