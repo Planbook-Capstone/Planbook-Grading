@@ -32,14 +32,26 @@ def parse_correct_answers(correct_answers: Dict[str, Any]) -> Dict[str, List[str
     
     # Xử lý Part 2
     if "part2" in correct_answers:
-        for question_num, answers_str in correct_answers["part2"].items():
-            # answers_str format: "D,D,S,S" tương ứng với a,b,c,d
-            answers_list = answers_str.split(",")
-            sub_parts = ["a", "b", "c", "d"]
-            
-            for i, answer in enumerate(answers_list):
-                if i < len(sub_parts):
-                    sub_part = sub_parts[i]
+        for question_num, answers_data in correct_answers["part2"].items():
+            # Handle both formats:
+            # Format 1: "D,D,S,S" (string)
+            # Format 2: {"a": "D", "b": "S", "c": "D", "d": "S"} (dict)
+
+            if isinstance(answers_data, str):
+                # Format 1: answers_data is string like "D,D,S,S"
+                answers_list = answers_data.split(",")
+                sub_parts = ["a", "b", "c", "d"]
+
+                for i, answer in enumerate(answers_list):
+                    if i < len(sub_parts):
+                        sub_part = sub_parts[i]
+                        answer = answer.strip()
+                        # Format: part2_{question_num}_{sub_part}_{answer}_x_y
+                        marked_circles["part2"].append(f"part2_{question_num}_{sub_part}_{answer}")
+
+            elif isinstance(answers_data, dict):
+                # Format 2: answers_data is dict like {"a": "D", "b": "S", "c": "D", "d": "S"}
+                for sub_part, answer in answers_data.items():
                     answer = answer.strip()
                     # Format: part2_{question_num}_{sub_part}_{answer}_x_y
                     marked_circles["part2"].append(f"part2_{question_num}_{sub_part}_{answer}")
@@ -103,6 +115,62 @@ def image_to_base64(image_array: np.ndarray) -> str:
     # Chuyển thành base64
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     return f"data:image/png;base64,{img_base64}"
+
+
+def parse_student_id_from_answers(student_answers: List[str]) -> str:
+    """
+    Parse student ID từ các circle labels của ID student
+    
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        
+    Returns:
+        String student ID (ví dụ: "123456")
+    """
+    id_digits = [""] * 6  # 6 vị trí cho student ID
+    
+    for answer in student_answers:
+        if answer.startswith("id_student_"):
+            parts = answer.split("_")
+            if len(parts) >= 5:
+                # Format: id_student_digit_position_x_y
+                digit = parts[2]     # số 0-9
+                position = int(parts[3]) - 1  # vị trí 1-6, chuyển về 0-5
+                
+                if 0 <= position < 6:
+                    id_digits[position] = digit
+    
+    # Ghép lại student ID từ trái sang phải
+    student_id = "".join(id_digits).rstrip()
+    return student_id
+
+
+def parse_exam_code_from_answers(student_answers: List[str]) -> str:
+    """
+    Parse exam code từ các circle labels của exam code
+    
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        
+    Returns:
+        String exam code (ví dụ: "123")
+    """
+    exam_code_digits = [""] * 3  # Chỉ 3 vị trí cho exam code
+    
+    for answer in student_answers:
+        if answer.startswith("exam_code_"):
+            parts = answer.split("_")
+            if len(parts) >= 5:
+                # Format: exam_code_digit_position_x_y
+                digit = parts[2]     # số 0-9
+                position = int(parts[3]) - 1  # vị trí 1-3, chuyển về 0-2
+                
+                if 0 <= position < 3:
+                    exam_code_digits[position] = digit
+    
+    # Ghép lại exam code từ trái sang phải, loại bỏ các vị trí trống cuối
+    exam_code = "".join(exam_code_digits).rstrip()
+    return exam_code
 
 
 def parse_student_answers(student_answers: List[str]) -> Dict[str, Dict[str, str]]:
@@ -241,7 +309,10 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
     detection_results, _ = detect_circles(image_path, debug=False)
     all_circles = detection_results.get("all_answers", [])
     student_answers = detection_results.get("student_answers", [])  # Đáp án học sinh đã tô
-    student_id = detection_results.get("student_id", "")  # ID học sinh
+    
+    # Parse student ID và exam code từ student answers
+    student_id = parse_student_id_from_answers(student_answers)
+    exam_code = parse_exam_code_from_answers(student_answers)
     
     # Parse đáp án học sinh theo format mong muốn
     student_answers_formatted = parse_student_answers(student_answers)
@@ -277,10 +348,11 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
     # Chuyển ảnh thành base64
     base64_image = image_to_base64(marked_image)
     
-    # Tạo response data bao gồm student_answers và student_id
+    # Tạo response data bao gồm student_answers, student_id và exam_code
     response_data = {
         "student_answers": student_answers_formatted,
-        "student_id": student_id
+        "student_id": student_id,
+        "exam_code": exam_code
     }
     
     return base64_image, response_data

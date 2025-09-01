@@ -70,6 +70,13 @@ async def create_upload_file(file: UploadFile = File(..., description="Image fil
         # Process the flattened image with main_service
         results = process_main_image(flattened_image_path)
 
+        # Also get exam_code from circle detection service
+        detection_results, _ = detect_circles(flattened_image_path, debug=False)
+        exam_code = detection_results.get("exam_code", "")
+
+        # Add exam_code to results
+        results["exam_code"] = exam_code
+
         return JSONResponse(content=results)
 
     except Exception as e:
@@ -221,6 +228,7 @@ async def detect_circles_endpoint(file: UploadFile = File(..., description="Imag
             "all_answers": detection_results.get("all_answers", []),
             "student_answers": detection_results.get("student_answers", []),
             "student_id": detection_results.get("student_id", ""),
+            "exam_code": detection_results.get("exam_code", ""),
             "debug_image_path": debug_image_path
         }
 
@@ -302,6 +310,7 @@ async def mark_correct_answers_endpoint(
             "marked_image_base64": base64_image,
             "student_answers": student_data["student_answers"],
             "student_id": student_data["student_id"],
+            "exam_code": student_data["exam_code"],
             "summary": summary,
             "message": "Đánh dấu đáp án đúng thành công"
         }
@@ -313,6 +322,8 @@ async def mark_correct_answers_endpoint(
     except Exception as e:
         # Log the actual error for debugging purposes
         logger.error(f"Error marking correct answers on image {file.filename}: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
 
         # Return user-friendly Vietnamese error message
         error_message = "Có lỗi xảy ra trong quá trình đánh dấu đáp án đúng."
