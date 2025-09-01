@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
@@ -8,10 +8,12 @@ import uuid
 import logging
 import requests
 import tempfile
+import json
 from urllib.parse import urlparse
 from api.main_service import process_image as process_main_image
 from api.omr_service import process_image as process_omr_image
 from api.circle_detection_service import detect_circles
+from api.answer_marking_service import mark_correct_answers_on_image, create_answer_summary
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +37,9 @@ app.add_middleware(
 # Pydantic models for request body
 class ImageUrlRequest(BaseModel):
     image_url: str
+
+class CorrectAnswersRequest(BaseModel):
+    correct_answers: dict
 
 UPLOAD_DIR = "temp_uploads"
 if not os.path.exists(UPLOAD_DIR):
@@ -236,6 +241,87 @@ async def detect_circles_endpoint(file: UploadFile = File(..., description="Imag
             os.remove(file_path)
         # The debug image is not removed automatically, as the user might want to access it.
         # A more robust solution would involve a cleanup mechanism for debug files.
+
+
+@app.post("/mark-correct-answers/")
+async def mark_correct_answers_endpoint(
+    file: UploadFile = File(..., description="Image file to mark correct answers on"),
+    correct_answers: str = Form(..., description="JSON string containing correct answers")
+):
+    """
+    API endpoint để đánh dấu đáp án đúng lên ảnh
+    
+    Args:
+        file: File ảnh upload
+        correct_answers: JSON string chứa đáp án đúng
+        
+    Returns:
+        JSONResponse chứa đường dẫn ảnh đã đánh dấu và thông tin summary
+    """
+    file_path = None
+    marked_image_path = None
+    
+    try:
+        # Parse JSON đáp án đúng
+        try:
+            correct_answers_dict = json.loads(correct_answers)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON format for correct_answers: {str(e)}")
+        
+        # Nếu JSON có cấu trúc {"correct_answers": {...}} thì lấy phần bên trong
+        # Nếu không thì sử dụng trực tiếp
+        if "correct_answers" in correct_answers_dict:
+            final_answers = correct_answers_dict["correct_answers"]
+        else:
+            final_answers = correct_answers_dict
+        
+        # Create a unique filename
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Save the uploaded file
+        with open(file_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+        # Đánh dấu đáp án đúng lên ảnh
+        marked_image_path = mark_correct_answers_on_image(
+            file_path, 
+            final_answers, 
+            output_dir="result"
+        )
+        
+        # Tạo summary thông tin
+        detection_results, _ = detect_circles(file_path, debug=False)
+        all_circles = detection_results.get("all_answers", [])
+        student_answers = detection_results.get("student_answers", [])
+        summary = create_answer_summary(final_answers, all_circles, student_answers)
+
+        response_data = {
+            "marked_image_path": marked_image_path,
+            "summary": summary,
+            "message": "Đánh dấu đáp án đúng thành công"
+        }
+
+        return JSONResponse(content=response_data)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        # Log the actual error for debugging purposes
+        logger.error(f"Error marking correct answers on image {file.filename}: {str(e)}")
+
+        # Return user-friendly Vietnamese error message
+        error_message = "Có lỗi xảy ra trong quá trình đánh dấu đáp án đúng."
+        return JSONResponse(
+            status_code=400,
+            content={"error": error_message, "message": str(e)}
+        )
+    finally:
+        # Clean up the uploaded file
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+        # marked_image_path is kept for user to access the result
 
 if __name__ == "__main__":
     # Configure uvicorn with increased limits for large file uploads
