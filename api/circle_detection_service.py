@@ -96,11 +96,11 @@ def _get_part3_symbol_label(pos_idx, y_coord):
     # Determine symbol/digit based on y coordinate
     if y_coord < 1280:  # Minus row
         if pos_idx == 0:  # Only first position has minus
-            return "minus"
+            return f"minus_{pos_idx+1}"
 
     elif y_coord < 1310:  # Comma row
         if pos_idx in [0, 1]:  # Middle positions have comma
-            return f"comma_{pos_idx+1}"
+            return f"comma_{pos_idx+2}"
         
     else:  # Digit rows (0-9)
         # Calculate which digit based on y coordinate
