@@ -7,6 +7,30 @@ from typing import Dict, List, Any, Tuple, Union
 from api.circle_detection_service import detect_circles
 
 
+def find_exam_code_in_list(student_exam_code: str, exam_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Tìm mã đề của học sinh trong danh sách các mã đề
+
+    Args:
+        student_exam_code: Mã đề của học sinh
+        exam_list: List các mã đề với đáp án
+
+    Returns:
+        Dict chứa thông tin mã đề và đáp án tương ứng
+
+    Raises:
+        ValueError: Nếu không tìm thấy mã đề phù hợp
+    """
+    for exam in exam_list:
+        exam_code = exam.get("code", "")
+        if exam_code == student_exam_code:
+            return exam
+
+    # Không tìm thấy mã đề phù hợp
+    available_codes = [exam.get("code", "") for exam in exam_list]
+    raise ValueError(f"Không tìm thấy mã đề '{student_exam_code}' trong danh sách. Các mã đề có sẵn: {available_codes}")
+
+
 def parse_correct_answers_new_format(correct_answers: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     """
     Parse correct answers từ array format mới thành danh sách các circle labels cần đánh dấu
@@ -842,17 +866,20 @@ def check_missing_answers(student_answers: List[str], correct_answers, all_circl
     return missing_answers
 
 
-def mark_correct_answers_on_image(image_path: str, correct_answers: Union[Dict[str, Any], List[Dict[str, Any]]], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
+def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any]], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
     """
     Đánh dấu đáp án đúng lên ảnh và trả về ảnh base64 + đáp án học sinh + student ID
 
     Args:
         image_path: Đường dẫn ảnh đầu vào
-        correct_answers: Dict chứa đáp án đúng
+        exam_list: List chứa các mã đề với đáp án đúng
         output_dir: Thư mục đầu ra
 
     Returns:
         Tuple (base64_image, response_data)
+
+    Raises:
+        ValueError: Nếu không tìm thấy mã đề phù hợp
     """
     # Đọc ảnh
     image = cv2.imread(image_path)
@@ -867,6 +894,20 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Union[Dict[s
     # Parse student ID và exam code từ student answers
     student_id = parse_student_id_from_answers(student_answers)
     exam_code = parse_exam_code_from_answers(student_answers)
+
+    # Tìm mã đề phù hợp trong danh sách
+    try:
+        matched_exam = find_exam_code_in_list(exam_code, exam_list)
+        correct_answers = matched_exam.get("answer_json", [])
+        grading_session_id = matched_exam.get("grading_session_id", None)
+    except ValueError as e:
+        # Trả về lỗi nếu không tìm thấy mã đề
+        return "", {
+            "error": str(e),
+            "student_code": student_id,
+            "exam_code": exam_code,
+            "available_exam_codes": [exam.get("code", "") for exam in exam_list]
+        }
 
     # Sử dụng formatted_answers từ detect_circles thay vì parse lại
     student_answers_formatted = detection_results.get("formatted_answers", {
@@ -975,6 +1016,10 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Union[Dict[s
         },
         "total_marked_circles": len(marked_circles)
     }
+
+    # Thêm thông tin về grading session
+    new_format_data["grading_session_id"] = matched_exam.get("grading_session_id", None)
+    new_format_data["matched_exam_code"] = matched_exam.get("code", "")
 
     return base64_image, new_format_data
 
