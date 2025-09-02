@@ -306,14 +306,12 @@ async def mark_correct_answers_endpoint(
         student_answers_raw = detection_results.get("student_answers", [])
         summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
 
-        response_data = {
-            "marked_image_base64": base64_image,
-            "student_answers": student_data["student_answers"],
-            "student_id": student_data["student_id"],
-            "exam_code": student_data["exam_code"],
-            "summary": summary,
-            "message": "Đánh dấu đáp án đúng thành công"
-        }
+        # student_data đã được chuyển đổi sang format mới trong answer_marking_service
+        response_data = student_data
+
+        # Thêm summary và message
+        response_data["summary"] = summary
+        response_data["message"] = "Đánh dấu đáp án đúng thành công"
 
         return JSONResponse(content=response_data)
 

@@ -297,8 +297,12 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
         rows.append(sorted(current_row, key=lambda c: c[0]))
 
     # There should be 4 rows (a, b, c, d)
+    print(f"DEBUG: Part2 detected {len(rows)} rows, expected 4")
     if len(rows) != 4:
         # Fallback or error for unexpected row count
+        print(f"DEBUG: Part2 row count mismatch - detected {len(rows)} rows instead of 4")
+        for i, row in enumerate(rows):
+            print(f"  Row {i}: {len(row)} circles")
         return [], []
 
     # Each row contains circles for 8 questions
@@ -520,4 +524,79 @@ def detect_circles(image_path, debug=False):
         debug_image_path = os.path.join(output_dir, f"{base_name}_circles_debug.png")
         cv2.imwrite(debug_image_path, debug_image)
 
-    return {"all_answers": all_answers, "student_answers": student_answers, "student_id": student_id, "exam_code": exam_code}, debug_image_path
+    # Format student answers into structured format
+    formatted_answers = _format_student_answers(student_answers)
+
+    return {
+        "all_answers": all_answers,
+        "student_answers": student_answers,
+        "student_id": student_id,
+        "exam_code": exam_code,
+        "formatted_answers": formatted_answers
+    }, debug_image_path
+
+
+def _format_student_answers(student_answers):
+    """
+    Format raw student answers into structured format by parts
+    """
+    formatted = {
+        "part1": {},
+        "part2": {},
+        "part3": {}
+    }
+
+    for answer in student_answers:
+        if answer.startswith("part1_"):
+            # Format: part1_1_a_236_702 -> question 1, answer a
+            parts = answer.split("_")
+            if len(parts) >= 3:
+                question_num = parts[1]
+                answer_choice = parts[2].upper()
+                formatted["part1"][question_num] = answer_choice
+
+        elif answer.startswith("part2_"):
+            # Format: part2_1_a_D_238_1054 -> question 1, sub_part a, answer D
+            parts = answer.split("_")
+            if len(parts) >= 4:
+                question_num = parts[1]
+                sub_part = parts[2]
+                answer_choice = parts[3]
+
+                if question_num not in formatted["part2"]:
+                    formatted["part2"][question_num] = {}
+                formatted["part2"][question_num][sub_part] = answer_choice
+
+        elif answer.startswith("part3_"):
+            # Format: part3_1_minus_1_232_1270 or part3_1_comma_3_298_1294 or part3_1_2_4_330_1370
+            parts = answer.split("_")
+            if len(parts) >= 4:
+                question_num = parts[1]
+                symbol_or_digit = parts[2]
+                position = int(parts[3]) if parts[3].isdigit() else 0
+
+                if question_num not in formatted["part3"]:
+                    # Initialize with empty positions (4 positions: 1,2,3,4)
+                    formatted["part3"][question_num] = ["", "", "", ""]
+
+                # Convert symbol to actual character
+                if symbol_or_digit == "minus":
+                    char = "-"
+                elif symbol_or_digit == "comma":
+                    char = ","
+                else:
+                    # It's a digit
+                    char = symbol_or_digit
+
+                # Place character at correct position (1-based to 0-based)
+                if 1 <= position <= 4:
+                    formatted["part3"][question_num][position - 1] = char
+
+    # Convert part3 arrays to strings
+    for question_num, positions in formatted["part3"].items():
+        if isinstance(positions, list):
+            # Join positions and remove trailing empty positions
+            answer_str = "".join(positions).rstrip()
+            formatted["part3"][question_num] = answer_str
+
+    return formatted

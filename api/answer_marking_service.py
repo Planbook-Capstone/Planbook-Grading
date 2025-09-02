@@ -100,6 +100,134 @@ def parse_part3_answer(question_num: str, answer_str: str) -> List[str]:
     return patterns
 
 
+def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, base64_image: str) -> Dict[str, Any]:
+    """
+    Chuyển đổi format đáp án từ format cũ sang format mới theo yêu cầu
+
+    Args:
+        student_answers: Dict đáp án theo format cũ
+        student_id: Mã học sinh
+        exam_code: Mã đề thi
+        base64_image: Ảnh base64
+
+    Returns:
+        Dict theo format mới
+    """
+    student_answer_json = []
+
+    # Section 1: MULTIPLE_CHOICE (Part 1) - Always include
+    questions_part1 = []
+    if "part1" in student_answers and student_answers["part1"]:
+        for question_num, answer in student_answers["part1"].items():
+            try:
+                # Extract only numeric part from question_num
+                numeric_part = ''.join(filter(str.isdigit, str(question_num)))
+                if numeric_part:
+                    questions_part1.append({
+                        "questionNumber": int(numeric_part),
+                        "answer": answer.upper()
+                    })
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Skipping invalid question_num '{question_num}' in part1: {e}")
+                continue
+
+        # Sort by question number
+        questions_part1.sort(key=lambda x: x["questionNumber"])
+
+    student_answer_json.append({
+        "sectionOrder": 1,
+        "sectionType": "MULTIPLE_CHOICE",
+        "questions": questions_part1
+    })
+
+    # Section 2: TRUE_FALSE (Part 2) - Always include
+    questions_part2 = []
+    if "part2" in student_answers and student_answers["part2"]:
+        for question_num, sub_answers in student_answers["part2"].items():
+            try:
+                # Extract only numeric part from question_num
+                numeric_part = ''.join(filter(str.isdigit, str(question_num)))
+                if not numeric_part:
+                    continue
+
+                if isinstance(sub_answers, dict):
+                    # Format: {"a": "D", "b": "S", "c": "D", "d": "S"}
+                    converted_answers = {}
+                    for sub_part, answer in sub_answers.items():
+                        converted_answers[sub_part] = "D" if answer.upper() == "D" else "S"
+
+                    questions_part2.append({
+                        "questionNumber": int(numeric_part),
+                        "answer": converted_answers
+                    })
+
+                elif isinstance(sub_answers, str):
+                    # Format: "D,D,S,S"
+                    answers_list = sub_answers.split(",")
+                    sub_parts = ["a", "b", "c", "d"]
+
+                    converted_answers = {}
+                    for i, answer in enumerate(answers_list):
+                        if i < len(sub_parts):
+                            sub_part = sub_parts[i]
+                            converted_answers[sub_part] = "D" if answer.strip().upper() == "D" else "S"
+
+                    questions_part2.append({
+                        "questionNumber": int(numeric_part),
+                        "answer": converted_answers
+                    })
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Skipping invalid question_num '{question_num}' in part2: {e}")
+                continue
+
+        # Sort by question number
+        questions_part2.sort(key=lambda x: x["questionNumber"])
+
+    student_answer_json.append({
+        "sectionOrder": 2,
+        "sectionType": "TRUE_FALSE",
+        "questions": questions_part2
+    })
+
+    # Section 3: ESSAY_CODE (Part 3) - Always include
+    questions_part3 = []
+    if "part3" in student_answers and student_answers["part3"]:
+        for question_num, answer in student_answers["part3"].items():
+            try:
+                # Extract only numeric part from question_num (e.g., "1a" -> "1")
+                numeric_part = ''.join(filter(str.isdigit, str(question_num)))
+                if numeric_part:
+                    questions_part3.append({
+                        "questionNumber": int(numeric_part),
+                        "answer": str(answer)
+                    })
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Skipping invalid question_num '{question_num}' in part3: {e}")
+                continue
+
+        # Sort by question number
+        questions_part3.sort(key=lambda x: x["questionNumber"])
+
+    student_answer_json.append({
+        "sectionOrder": 3,
+        "sectionType": "ESSAY_CODE",
+        "questions": questions_part3
+    })
+
+    # Check if base64_image already has the data URL prefix
+    if base64_image.startswith("data:image/"):
+        image_base64 = base64_image
+    else:
+        image_base64 = f"data:image/png;base64,{base64_image}"
+
+    return {
+        "student_code": student_id,
+        "exam_code": exam_code,
+        "image_base64": image_base64,
+        "student_answer_json": student_answer_json
+    }
+
+
 def image_to_base64(image_array: np.ndarray) -> str:
     """
     Chuyển đổi ảnh numpy array thành base64 string
@@ -270,10 +398,10 @@ def find_matching_circles(all_circles: List[str], target_patterns: List[str]) ->
 def extract_coordinates_from_label(circle_label: str) -> Tuple[int, int]:
     """
     Trích xuất tọa độ x, y từ circle label
-    
+
     Args:
         circle_label: Chuỗi dạng "part1_1_a_236_702"
-        
+
     Returns:
         Tuple (x, y) tọa độ
     """
@@ -288,15 +416,225 @@ def extract_coordinates_from_label(circle_label: str) -> Tuple[int, int]:
     return 0, 0
 
 
+def check_multiple_answers_part1(student_answers: List[str]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra các câu trong Part 1 có nhiều hơn 1 đáp án được chọn
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+
+    Returns:
+        Dict với key là question_num và value là list các circle labels bị trùng
+    """
+    part1_answers = {}
+    multiple_answers = {}
+
+    for answer in student_answers:
+        if answer.startswith("part1_"):
+            parts = answer.split("_")
+            if len(parts) >= 5:
+                question_num = parts[1]
+
+                if question_num not in part1_answers:
+                    part1_answers[question_num] = []
+                part1_answers[question_num].append(answer)
+
+    # Tìm các câu có nhiều hơn 1 đáp án
+    for question_num, answers in part1_answers.items():
+        if len(answers) > 1:
+            multiple_answers[question_num] = answers
+
+    return multiple_answers
+
+
+def check_multiple_answers_part2(student_answers: List[str]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra các câu trong Part 2 có cả D và S trong cùng 1 sub-question
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+
+    Returns:
+        Dict với key là "question_num_sub_part" và value là list các circle labels bị trùng
+    """
+    part2_answers = {}
+    multiple_answers = {}
+
+    for answer in student_answers:
+        if answer.startswith("part2_"):
+            parts = answer.split("_")
+            if len(parts) >= 6:
+                question_num = parts[1]
+                sub_part = parts[2]
+                choice = parts[3]  # D hoặc S
+
+                key = f"{question_num}_{sub_part}"
+                if key not in part2_answers:
+                    part2_answers[key] = []
+                part2_answers[key].append(answer)
+
+    # Tìm các sub-question có cả D và S
+    for key, answers in part2_answers.items():
+        if len(answers) > 1:
+            # Kiểm tra xem có cả D và S không
+            has_d = any("_D_" in answer for answer in answers)
+            has_s = any("_S_" in answer for answer in answers)
+            if has_d and has_s:
+                multiple_answers[key] = answers
+
+    return multiple_answers
+
+
+def check_multiple_answers_part3(student_answers: List[str], correct_answers: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra Part 3 có các vấn đề:
+    1. Học sinh đánh ô thừa (không có trong đáp án)
+    2. Cùng 1 vị trí có nhiều ký tự được chọn
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        correct_answers: Dict chứa đáp án đúng
+
+    Returns:
+        Dict với key là loại lỗi và value là list các circle labels bị lỗi
+    """
+    part3_student = {}
+    part3_correct_positions = {}
+    issues = {
+        "extra_answers": [],  # Ô thừa
+        "multiple_at_position": {}  # Nhiều ký tự cùng vị trí
+    }
+
+    # Parse đáp án đúng để biết các vị trí hợp lệ
+    if "part3" in correct_answers:
+        for question_num, answer_str in correct_answers["part3"].items():
+            part3_correct_positions[question_num] = len(answer_str)
+
+    # Nhóm đáp án học sinh theo câu hỏi và vị trí
+    for answer in student_answers:
+        if answer.startswith("part3_"):
+            parts = answer.split("_")
+            if len(parts) >= 6:
+                question_num = parts[1]
+                symbol = parts[2]
+                position = parts[3]
+
+                if question_num not in part3_student:
+                    part3_student[question_num] = {}
+                if position not in part3_student[question_num]:
+                    part3_student[question_num][position] = []
+
+                part3_student[question_num][position].append(answer)
+
+    # Kiểm tra các vấn đề
+    for question_num, positions in part3_student.items():
+        max_valid_position = part3_correct_positions.get(question_num, 0)
+
+        for position, answers in positions.items():
+            position_int = int(position)
+
+            # Kiểm tra ô thừa
+            if position_int > max_valid_position:
+                issues["extra_answers"].extend(answers)
+
+            # Kiểm tra nhiều ký tự cùng vị trí
+            if len(answers) > 1:
+                key = f"{question_num}_{position}"
+                issues["multiple_at_position"][key] = answers
+
+    return issues
+
+
+def check_missing_answers(student_answers: List[str], correct_answers: Dict[str, Any], all_circles: List[str]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra các câu không có đáp án nào được chọn
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        correct_answers: Dict chứa đáp án đúng
+        all_circles: List tất cả circle labels có thể
+
+    Returns:
+        Dict với key là part và value là list các đáp án đúng bị thiếu
+    """
+    missing_answers = {
+        "part1": [],
+        "part2": [],
+        "part3": []
+    }
+
+    # Parse đáp án đúng
+    marked_circles_patterns = parse_correct_answers(correct_answers)
+
+    # Part 1: Kiểm tra từng câu
+    if "part1" in correct_answers:
+        for question_num in correct_answers["part1"].keys():
+            # Kiểm tra xem câu này có đáp án nào được chọn không
+            has_answer = any(answer.startswith(f"part1_{question_num}_") for answer in student_answers)
+            if not has_answer:
+                # Tìm đáp án đúng cho câu này
+                correct_pattern = f"part1_{question_num}_{correct_answers['part1'][question_num].lower()}"
+                matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                missing_answers["part1"].extend(matching_circles)
+
+    # Part 2: Kiểm tra từng sub-question
+    if "part2" in correct_answers:
+        for question_num, answers_data in correct_answers["part2"].items():
+            if isinstance(answers_data, str):
+                answers_list = answers_data.split(",")
+                sub_parts = ["a", "b", "c", "d"]
+                for i, answer in enumerate(answers_list):
+                    if i < len(sub_parts):
+                        sub_part = sub_parts[i]
+                        # Kiểm tra sub-question này có đáp án không
+                        has_answer = any(answer_label.startswith(f"part2_{question_num}_{sub_part}_") for answer_label in student_answers)
+                        if not has_answer:
+                            correct_pattern = f"part2_{question_num}_{sub_part}_{answer.strip()}"
+                            matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                            missing_answers["part2"].extend(matching_circles)
+
+            elif isinstance(answers_data, dict):
+                for sub_part, answer in answers_data.items():
+                    has_answer = any(answer_label.startswith(f"part2_{question_num}_{sub_part}_") for answer_label in student_answers)
+                    if not has_answer:
+                        correct_pattern = f"part2_{question_num}_{sub_part}_{answer.strip()}"
+                        matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                        missing_answers["part2"].extend(matching_circles)
+
+    # Part 3: Kiểm tra từng vị trí
+    if "part3" in correct_answers:
+        for question_num, answer_str in correct_answers["part3"].items():
+            for position in range(1, len(answer_str) + 1):
+                # Kiểm tra vị trí này có ký tự nào được chọn không
+                has_answer = any(answer.startswith(f"part3_{question_num}_") and f"_{position}_" in answer for answer in student_answers)
+                if not has_answer:
+                    # Tìm ký tự đúng ở vị trí này
+                    char = answer_str[position - 1]
+                    if char == '-':
+                        symbol = 'minus'
+                    elif char == ',':
+                        symbol = 'comma'
+                    elif char.isdigit():
+                        symbol = char
+                    else:
+                        continue
+
+                    correct_pattern = f"part3_{question_num}_{symbol}_{position}"
+                    matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                    missing_answers["part3"].extend(matching_circles)
+
+    return missing_answers
+
+
 def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, Any], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
     """
     Đánh dấu đáp án đúng lên ảnh và trả về ảnh base64 + đáp án học sinh + student ID
-    
+
     Args:
         image_path: Đường dẫn ảnh đầu vào
         correct_answers: Dict chứa đáp án đúng
         output_dir: Thư mục đầu ra
-        
+
     Returns:
         Tuple (base64_image, response_data)
     """
@@ -304,58 +642,211 @@ def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, An
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Không thể đọc ảnh: {image_path}")
-    
+
     # Phát hiện tất cả circles
     detection_results, _ = detect_circles(image_path, debug=False)
     all_circles = detection_results.get("all_answers", [])
     student_answers = detection_results.get("student_answers", [])  # Đáp án học sinh đã tô
-    
+
     # Parse student ID và exam code từ student answers
     student_id = parse_student_id_from_answers(student_answers)
     exam_code = parse_exam_code_from_answers(student_answers)
-    
-    # Parse đáp án học sinh theo format mong muốn
-    student_answers_formatted = parse_student_answers(student_answers)
-    
+
+    # Sử dụng formatted_answers từ detect_circles thay vì parse lại
+    student_answers_formatted = detection_results.get("formatted_answers", {
+        "part1": {},
+        "part2": {},
+        "part3": {}
+    })
+
     # Parse đáp án đúng
     marked_circles_patterns = parse_correct_answers(correct_answers)
-    
-    # Tìm các circles cần đánh dấu cho từng part
-    circles_to_mark = []
-    
-    for part, patterns in marked_circles_patterns.items():
-        matching_circles = find_matching_circles(all_circles, patterns)
-        circles_to_mark.extend(matching_circles)
-    
+
+    # Kiểm tra các trường hợp đặc biệt
+    multiple_part1 = check_multiple_answers_part1(student_answers)
+    multiple_part2 = check_multiple_answers_part2(student_answers)
+    multiple_part3 = check_multiple_answers_part3(student_answers, correct_answers)
+    missing_answers = check_missing_answers(student_answers, correct_answers, all_circles)
+
     # Đánh dấu các circles lên ảnh
     marked_image = image.copy()
-    
-    for circle_label in circles_to_mark:
+
+    # Set để theo dõi các circles đã được đánh dấu
+    marked_circles = set()
+
+    # 1. Đánh dấu màu vàng cho các trường hợp nhiều đáp án
+    # Part 1: Nhiều hơn 1 đáp án trong cùng câu
+    for question_num, duplicate_answers in multiple_part1.items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(marked_image, (x, y), 10, (0, 255, 255), 2)  # Yellow
+                marked_circles.add(circle_label)
+
+    # Part 2: Cả D và S trong cùng sub-question
+    for key, duplicate_answers in multiple_part2.items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(marked_image, (x, y), 10, (0, 255, 255), 2)  # Yellow
+                marked_circles.add(circle_label)
+
+    # Part 3: Ô thừa và nhiều ký tự cùng vị trí
+    for circle_label in multiple_part3["extra_answers"]:
         x, y = extract_coordinates_from_label(circle_label)
         if x > 0 and y > 0:
-            # Kiểm tra xem học sinh có tô đáp án này không
-            if circle_label in student_answers:
-                # Học sinh đã tô đúng -> màu xanh lá cây
-                color = (0, 255, 0)  # Green
-            else:
-                # Học sinh chưa tô hoặc tô sai -> màu đỏ  
-                color = (0, 0, 255)  # Red
-            
-            # Vẽ vòng tròn với màu tương ứng
-            cv2.circle(marked_image, (x, y), 12, color, 3)
+            cv2.circle(marked_image, (x, y), 10, (0, 255, 255), 2)  # Yellow
+            marked_circles.add(circle_label)
 
-    
+    for key, duplicate_answers in multiple_part3["multiple_at_position"].items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(marked_image, (x, y), 10, (0, 255, 255), 2)  # Yellow
+                marked_circles.add(circle_label)
+
+    # 2. Đánh dấu màu đỏ cho đáp án đúng bị thiếu (không có ô nào được chọn)
+    for part_name, missing_circles in missing_answers.items():
+        for circle_label in missing_circles:
+            if circle_label not in marked_circles:
+                x, y = extract_coordinates_from_label(circle_label)
+                if x > 0 and y > 0:
+                    cv2.circle(marked_image, (x, y), 10, (0, 0, 255), 2)  # Red
+                    marked_circles.add(circle_label)
+
+    # 3. Đánh dấu màu xanh/đỏ cho các đáp án bình thường (không có vấn đề đặc biệt)
+    for part_name, patterns in marked_circles_patterns.items():
+        matching_circles = find_matching_circles(all_circles, patterns)
+
+        for circle_label in matching_circles:
+            if circle_label not in marked_circles:
+                x, y = extract_coordinates_from_label(circle_label)
+                if x > 0 and y > 0:
+                    # Kiểm tra xem học sinh có tô đáp án này không
+                    if circle_label in student_answers:
+                        # Học sinh đã tô đúng -> màu xanh lá cây
+                        color = (0, 255, 0)  # Green
+                    else:
+                        # Học sinh chưa tô hoặc tô sai -> màu đỏ
+                        color = (0, 0, 255)  # Red
+
+                    # Vẽ vòng tròn với màu tương ứng
+                    cv2.circle(marked_image, (x, y), 10, color, 2)
+                    marked_circles.add(circle_label)
+
     # Chuyển ảnh thành base64
     base64_image = image_to_base64(marked_image)
-    
-    # Tạo response data bao gồm student_answers, student_id và exam_code
-    response_data = {
-        "student_answers": student_answers_formatted,
-        "student_id": student_id,
-        "exam_code": exam_code
+
+    # Chuyển đổi sang format mới
+    new_format_data = convert_to_new_format(
+        student_answers_formatted,
+        student_id,
+        exam_code,
+        base64_image
+    )
+
+    # Tạo báo cáo chi tiết về các vấn đề
+    marking_report = create_marking_report(multiple_part1, multiple_part2, multiple_part3, missing_answers)
+
+    # Thêm thông tin về các vấn đề được phát hiện
+    new_format_data["marking_issues"] = {
+        "report": marking_report,
+        "raw_data": {
+            "multiple_answers_part1": multiple_part1,
+            "multiple_answers_part2": multiple_part2,
+            "multiple_answers_part3": multiple_part3,
+            "missing_answers": missing_answers
+        },
+        "total_marked_circles": len(marked_circles)
     }
-    
-    return base64_image, response_data
+
+    return base64_image, new_format_data
+
+
+def create_marking_report(multiple_part1: Dict[str, List[str]],
+                         multiple_part2: Dict[str, List[str]],
+                         multiple_part3: Dict[str, List[str]],
+                         missing_answers: Dict[str, List[str]]) -> Dict[str, Any]:
+    """
+    Tạo báo cáo chi tiết về các vấn đề đánh dấu
+
+    Args:
+        multiple_part1: Dict các câu Part 1 có nhiều đáp án
+        multiple_part2: Dict các câu Part 2 có nhiều đáp án
+        multiple_part3: Dict các vấn đề Part 3
+        missing_answers: Dict các đáp án bị thiếu
+
+    Returns:
+        Dict chứa báo cáo chi tiết
+    """
+    report = {
+        "summary": {
+            "total_issues": 0,
+            "part1_multiple_answers": len(multiple_part1),
+            "part2_multiple_answers": len(multiple_part2),
+            "part3_extra_answers": len(multiple_part3.get("extra_answers", [])),
+            "part3_multiple_at_position": len(multiple_part3.get("multiple_at_position", {})),
+            "missing_answers_total": sum(len(circles) for circles in missing_answers.values())
+        },
+        "details": {
+            "part1_issues": [],
+            "part2_issues": [],
+            "part3_issues": [],
+            "missing_answers_details": missing_answers
+        }
+    }
+
+    # Chi tiết Part 1
+    for question_num, duplicate_answers in multiple_part1.items():
+        report["details"]["part1_issues"].append({
+            "question": question_num,
+            "issue": "multiple_answers",
+            "description": f"Câu {question_num} có {len(duplicate_answers)} đáp án được chọn",
+            "affected_circles": duplicate_answers
+        })
+
+    # Chi tiết Part 2
+    for key, duplicate_answers in multiple_part2.items():
+        question_num, sub_part = key.split("_")
+        report["details"]["part2_issues"].append({
+            "question": f"{question_num}{sub_part}",
+            "issue": "both_d_and_s",
+            "description": f"Câu {question_num}{sub_part} có cả D và S được chọn",
+            "affected_circles": duplicate_answers
+        })
+
+    # Chi tiết Part 3
+    for circle_label in multiple_part3.get("extra_answers", []):
+        parts = circle_label.split("_")
+        if len(parts) >= 4:
+            question_num = parts[1]
+            position = parts[3]
+            report["details"]["part3_issues"].append({
+                "question": question_num,
+                "issue": "extra_answer",
+                "description": f"Câu {question_num} có ô thừa ở vị trí {position}",
+                "affected_circles": [circle_label]
+            })
+
+    for key, duplicate_answers in multiple_part3.get("multiple_at_position", {}).items():
+        question_num, position = key.split("_")
+        report["details"]["part3_issues"].append({
+            "question": question_num,
+            "issue": "multiple_at_position",
+            "description": f"Câu {question_num} có nhiều ký tự ở vị trí {position}",
+            "affected_circles": duplicate_answers
+        })
+
+    # Tính tổng số vấn đề
+    report["summary"]["total_issues"] = (
+        len(multiple_part1) +
+        len(multiple_part2) +
+        len(multiple_part3.get("extra_answers", [])) +
+        len(multiple_part3.get("multiple_at_position", {})) +
+        report["summary"]["missing_answers_total"]
+    )
+
+    return report
 
 
 def create_answer_summary(correct_answers: Dict[str, Any], all_circles: List[str], student_answers: List[str] = None) -> Dict[str, Any]:
