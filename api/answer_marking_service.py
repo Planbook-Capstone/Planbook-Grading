@@ -3,17 +3,17 @@ import numpy as np
 import os
 import json
 import base64
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Union
 from api.circle_detection_service import detect_circles
 
 
-def parse_correct_answers(correct_answers: Dict[str, Any]) -> Dict[str, List[str]]:
+def parse_correct_answers_new_format(correct_answers: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     """
-    Parse correct answers từ JSON format thành danh sách các circle labels cần đánh dấu
-    
+    Parse correct answers từ array format mới thành danh sách các circle labels cần đánh dấu
+
     Args:
-        correct_answers: Dict chứa đáp án đúng cho từng phần
-        
+        correct_answers: List chứa các section với đáp án đúng
+
     Returns:
         Dict với key là part và value là list các circle labels cần đánh dấu
     """
@@ -22,14 +22,75 @@ def parse_correct_answers(correct_answers: Dict[str, Any]) -> Dict[str, List[str
         "part2": [],
         "part3": []
     }
-    
+
+    for section in correct_answers:
+        section_type = section.get("sectionType", "")
+        questions = section.get("questions", [])
+
+        if section_type == "MULTIPLE_CHOICE":
+            # Xử lý Part 1
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer = question.get("answer", "").lower()
+                # Format: part1_{question_num}_{answer}_x_y
+                marked_circles["part1"].append(f"part1_{question_num}_{answer}")
+
+        elif section_type == "TRUE_FALSE":
+            # Xử lý Part 2
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer_dict = question.get("answer", {})
+
+                for sub_part, answer in answer_dict.items():
+                    # Chuyển đổi "Đ" thành "D" và "S" giữ nguyên
+                    if answer == "Đ":
+                        answer = "D"
+                    elif answer == "S":
+                        answer = "S"
+                    # Format: part2_{question_num}_{sub_part}_{answer}_x_y
+                    marked_circles["part2"].append(f"part2_{question_num}_{sub_part}_{answer}")
+
+        elif section_type == "ESSAY_CODE":
+            # Xử lý Part 3
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer_str = str(question.get("answer", ""))
+                # Parse answer string để tìm các ký tự và vị trí của chúng
+                patterns = parse_part3_answer(question_num, answer_str)
+                marked_circles["part3"].extend(patterns)
+
+    return marked_circles
+
+
+def parse_correct_answers(correct_answers) -> Dict[str, List[str]]:
+    """
+    Parse correct answers từ JSON format thành danh sách các circle labels cần đánh dấu
+    Hỗ trợ cả format cũ (Dict) và format mới (List)
+
+    Args:
+        correct_answers: Dict hoặc List chứa đáp án đúng
+
+    Returns:
+        Dict với key là part và value là list các circle labels cần đánh dấu
+    """
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        return parse_correct_answers_new_format(correct_answers)
+
+    # Format cũ (Dict)
+    marked_circles = {
+        "part1": [],
+        "part2": [],
+        "part3": []
+    }
+
     # Xử lý Part 1
     if "part1" in correct_answers:
         for question_num, answer in correct_answers["part1"].items():
             answer_lower = answer.lower()
             # Format: part1_{question_num}_{answer}_x_y
             marked_circles["part1"].append(f"part1_{question_num}_{answer_lower}")
-    
+
     # Xử lý Part 2
     if "part2" in correct_answers:
         for question_num, answers_data in correct_answers["part2"].items():
@@ -55,14 +116,14 @@ def parse_correct_answers(correct_answers: Dict[str, Any]) -> Dict[str, List[str
                     answer = answer.strip()
                     # Format: part2_{question_num}_{sub_part}_{answer}_x_y
                     marked_circles["part2"].append(f"part2_{question_num}_{sub_part}_{answer}")
-    
+
     # Xử lý Part 3
     if "part3" in correct_answers:
         for question_num, answer_str in correct_answers["part3"].items():
             # Parse answer string để tìm các ký tự và vị trí của chúng
             patterns = parse_part3_answer(question_num, answer_str)
             marked_circles["part3"].extend(patterns)
-    
+
     return marked_circles
 
 
@@ -485,15 +546,15 @@ def check_multiple_answers_part2(student_answers: List[str]) -> Dict[str, List[s
     return multiple_answers
 
 
-def check_multiple_answers_part3(student_answers: List[str], correct_answers: Dict[str, Any]) -> Dict[str, List[str]]:
+def check_multiple_answers_part3_new_format(student_answers: List[str], correct_answers: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     """
-    Kiểm tra Part 3 có các vấn đề:
+    Kiểm tra Part 3 có các vấn đề (format mới):
     1. Học sinh đánh ô thừa (không có trong đáp án)
     2. Cùng 1 vị trí có nhiều ký tự được chọn
 
     Args:
         student_answers: List các circle labels mà học sinh đã tô
-        correct_answers: Dict chứa đáp án đúng
+        correct_answers: List chứa các section với đáp án đúng
 
     Returns:
         Dict với key là loại lỗi và value là list các circle labels bị lỗi
@@ -506,9 +567,13 @@ def check_multiple_answers_part3(student_answers: List[str], correct_answers: Di
     }
 
     # Parse đáp án đúng để biết các vị trí hợp lệ
-    if "part3" in correct_answers:
-        for question_num, answer_str in correct_answers["part3"].items():
-            part3_correct_positions[question_num] = len(answer_str)
+    for section in correct_answers:
+        if section.get("sectionType") == "ESSAY_CODE":
+            questions = section.get("questions", [])
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer_str = str(question.get("answer", ""))
+                part3_correct_positions[question_num] = len(answer_str)
 
     # Nhóm đáp án học sinh theo câu hỏi và vị trí
     for answer in student_answers:
@@ -516,7 +581,6 @@ def check_multiple_answers_part3(student_answers: List[str], correct_answers: Di
             parts = answer.split("_")
             if len(parts) >= 6:
                 question_num = parts[1]
-                symbol = parts[2]
                 position = parts[3]
 
                 if question_num not in part3_student:
@@ -545,13 +609,78 @@ def check_multiple_answers_part3(student_answers: List[str], correct_answers: Di
     return issues
 
 
-def check_missing_answers(student_answers: List[str], correct_answers: Dict[str, Any], all_circles: List[str]) -> Dict[str, List[str]]:
+def check_multiple_answers_part3(student_answers: List[str], correct_answers) -> Dict[str, List[str]]:
     """
-    Kiểm tra các câu không có đáp án nào được chọn
+    Kiểm tra Part 3 có các vấn đề:
+    1. Học sinh đánh ô thừa (không có trong đáp án)
+    2. Cùng 1 vị trí có nhiều ký tự được chọn
+    Hỗ trợ cả format cũ (Dict) và format mới (List)
 
     Args:
         student_answers: List các circle labels mà học sinh đã tô
-        correct_answers: Dict chứa đáp án đúng
+        correct_answers: Dict hoặc List chứa đáp án đúng
+
+    Returns:
+        Dict với key là loại lỗi và value là list các circle labels bị lỗi
+    """
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        return check_multiple_answers_part3_new_format(student_answers, correct_answers)
+
+    # Format cũ (Dict)
+    part3_student = {}
+    part3_correct_positions = {}
+    issues = {
+        "extra_answers": [],  # Ô thừa
+        "multiple_at_position": {}  # Nhiều ký tự cùng vị trí
+    }
+
+    # Parse đáp án đúng để biết các vị trí hợp lệ
+    if "part3" in correct_answers:
+        for question_num, answer_str in correct_answers["part3"].items():
+            part3_correct_positions[question_num] = len(answer_str)
+
+    # Nhóm đáp án học sinh theo câu hỏi và vị trí
+    for answer in student_answers:
+        if answer.startswith("part3_"):
+            parts = answer.split("_")
+            if len(parts) >= 6:
+                question_num = parts[1]
+                position = parts[3]
+
+                if question_num not in part3_student:
+                    part3_student[question_num] = {}
+                if position not in part3_student[question_num]:
+                    part3_student[question_num][position] = []
+
+                part3_student[question_num][position].append(answer)
+
+    # Kiểm tra các vấn đề
+    for question_num, positions in part3_student.items():
+        max_valid_position = part3_correct_positions.get(question_num, 0)
+
+        for position, answers in positions.items():
+            position_int = int(position)
+
+            # Kiểm tra ô thừa
+            if position_int > max_valid_position:
+                issues["extra_answers"].extend(answers)
+
+            # Kiểm tra nhiều ký tự cùng vị trí
+            if len(answers) > 1:
+                key = f"{question_num}_{position}"
+                issues["multiple_at_position"][key] = answers
+
+    return issues
+
+
+def check_missing_answers_new_format(student_answers: List[str], correct_answers: List[Dict[str, Any]], all_circles: List[str]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra các câu không có đáp án nào được chọn (format mới)
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        correct_answers: List chứa các section với đáp án đúng
         all_circles: List tất cả circle labels có thể
 
     Returns:
@@ -563,8 +692,95 @@ def check_missing_answers(student_answers: List[str], correct_answers: Dict[str,
         "part3": []
     }
 
-    # Parse đáp án đúng
-    marked_circles_patterns = parse_correct_answers(correct_answers)
+    for section in correct_answers:
+        section_type = section.get("sectionType", "")
+        questions = section.get("questions", [])
+
+        if section_type == "MULTIPLE_CHOICE":
+            # Part 1: Kiểm tra từng câu
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer = question.get("answer", "").lower()
+
+                # Kiểm tra xem câu này có đáp án nào được chọn không
+                has_answer = any(answer_label.startswith(f"part1_{question_num}_") for answer_label in student_answers)
+                if not has_answer:
+                    # Tìm đáp án đúng cho câu này
+                    correct_pattern = f"part1_{question_num}_{answer}"
+                    matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                    missing_answers["part1"].extend(matching_circles)
+
+        elif section_type == "TRUE_FALSE":
+            # Part 2: Kiểm tra từng sub-question
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer_dict = question.get("answer", {})
+
+                for sub_part, answer in answer_dict.items():
+                    # Chuyển đổi "Đ" thành "D"
+                    if answer == "Đ":
+                        answer = "D"
+                    elif answer == "S":
+                        answer = "S"
+
+                    # Kiểm tra sub-question này có đáp án không
+                    has_answer = any(answer_label.startswith(f"part2_{question_num}_{sub_part}_") for answer_label in student_answers)
+                    if not has_answer:
+                        correct_pattern = f"part2_{question_num}_{sub_part}_{answer}"
+                        matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                        missing_answers["part2"].extend(matching_circles)
+
+        elif section_type == "ESSAY_CODE":
+            # Part 3: Kiểm tra từng vị trí
+            for question in questions:
+                question_num = str(question.get("questionNumber", ""))
+                answer_str = str(question.get("answer", ""))
+
+                for position in range(1, len(answer_str) + 1):
+                    # Kiểm tra vị trí này có ký tự nào được chọn không
+                    has_answer = any(answer.startswith(f"part3_{question_num}_") and f"_{position}_" in answer for answer in student_answers)
+                    if not has_answer:
+                        # Tìm ký tự đúng ở vị trí này
+                        char = answer_str[position - 1]
+                        if char == '-':
+                            symbol = 'minus'
+                        elif char == ',':
+                            symbol = 'comma'
+                        elif char.isdigit():
+                            symbol = char
+                        else:
+                            continue
+
+                        correct_pattern = f"part3_{question_num}_{symbol}_{position}"
+                        matching_circles = find_matching_circles(all_circles, [correct_pattern])
+                        missing_answers["part3"].extend(matching_circles)
+
+    return missing_answers
+
+
+def check_missing_answers(student_answers: List[str], correct_answers, all_circles: List[str]) -> Dict[str, List[str]]:
+    """
+    Kiểm tra các câu không có đáp án nào được chọn
+    Hỗ trợ cả format cũ (Dict) và format mới (List)
+
+    Args:
+        student_answers: List các circle labels mà học sinh đã tô
+        correct_answers: Dict hoặc List chứa đáp án đúng
+        all_circles: List tất cả circle labels có thể
+
+    Returns:
+        Dict với key là part và value là list các đáp án đúng bị thiếu
+    """
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        return check_missing_answers_new_format(student_answers, correct_answers, all_circles)
+
+    # Format cũ (Dict)
+    missing_answers = {
+        "part1": [],
+        "part2": [],
+        "part3": []
+    }
 
     # Part 1: Kiểm tra từng câu
     if "part1" in correct_answers:
@@ -626,7 +842,7 @@ def check_missing_answers(student_answers: List[str], correct_answers: Dict[str,
     return missing_answers
 
 
-def mark_correct_answers_on_image(image_path: str, correct_answers: Dict[str, Any], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
+def mark_correct_answers_on_image(image_path: str, correct_answers: Union[Dict[str, Any], List[Dict[str, Any]]], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
     """
     Đánh dấu đáp án đúng lên ảnh và trả về ảnh base64 + đáp án học sinh + student ID
 
