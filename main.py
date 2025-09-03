@@ -266,34 +266,71 @@ async def detect_circles_endpoint(file: UploadFile = File(..., description="Imag
 @app.post("/mark-correct-answers/")
 async def mark_correct_answers_endpoint(
     file: UploadFile = File(..., description="Image file to mark correct answers on"),
-    correct_answers: str = Form(..., description="JSON string containing correct answers")
+    grading_session_data: str = Form(..., description="JSON string containing grading session data with answer sheet keys")
 ):
     """
     API endpoint để đánh dấu đáp án đúng lên ảnh
-    
+
     Args:
         file: File ảnh upload
-        correct_answers: JSON string chứa đáp án đúng
-        
+        grading_session_data: JSON string chứa thông tin phiên chấm bài với answer_sheet_keys
+
     Returns:
         JSONResponse chứa đường dẫn ảnh đã đánh dấu và thông tin summary
     """
     file_path = None
     marked_image_path = None
-    
+
     try:
-        # Parse JSON đáp án đúng
+        # Parse JSON dữ liệu phiên chấm bài
         try:
-            correct_answers_dict = json.loads(correct_answers)
+            session_data = json.loads(grading_session_data)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON format for correct_answers: {str(e)}")
-        
-        # Nếu JSON có cấu trúc {"correct_answers": {...}} thì lấy phần bên trong
-        # Nếu không thì sử dụng trực tiếp
-        if "correct_answers" in correct_answers_dict:
-            final_answers = correct_answers_dict["correct_answers"]
+            raise HTTPException(status_code=400, detail=f"Invalid JSON format for grading_session_data: {str(e)}")
+
+        # Kiểm tra định dạng dữ liệu: mới (có answer_sheet_keys) hay cũ (có part1, part2, part3)
+        if "answer_sheet_keys" in session_data:
+            # Định dạng mới
+            answer_sheet_keys = session_data["answer_sheet_keys"]
+            if not isinstance(answer_sheet_keys, list) or len(answer_sheet_keys) == 0:
+                raise HTTPException(status_code=400, detail="'answer_sheet_keys' must be a non-empty list")
+
+            # Chuyển đổi answer_sheet_keys thành định dạng exam_list mà hàm mark_correct_answers_on_image cần
+            exam_list = []
+            for answer_sheet in answer_sheet_keys:
+                exam_item = {
+                    "code": answer_sheet.get("code", ""),
+                    "answer_json": answer_sheet.get("answer_json", []),
+                    "grading_session_id": answer_sheet.get("grading_session_id", session_data.get("id"))
+                }
+                exam_list.append(exam_item)
+
+        elif any(key in session_data for key in ["part1", "part2", "part3"]):
+            # Định dạng cũ - tương thích ngược
+            print("🔄 Using legacy format for backward compatibility")
+
+            # Tạo một exam_list giả với mã đề mặc định
+            exam_list = [{
+                "code": "000",  # Mã đề mặc định cho định dạng cũ
+                "answer_json": session_data,  # Sử dụng trực tiếp định dạng cũ
+                "grading_session_id": None
+            }]
+
+        elif "correct_answers" in session_data:
+            # Định dạng cũ với wrapper
+            print("🔄 Using legacy format with wrapper for backward compatibility")
+
+            exam_list = [{
+                "code": "000",  # Mã đề mặc định cho định dạng cũ
+                "answer_json": session_data["correct_answers"],
+                "grading_session_id": None
+            }]
+
         else:
-            final_answers = correct_answers_dict
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid data format. Expected either 'answer_sheet_keys' (new format) or 'part1/part2/part3' (legacy format)"
+            )
         
         # Create a unique filename
         file_extension = os.path.splitext(file.filename)[1]
@@ -328,7 +365,7 @@ async def mark_correct_answers_endpoint(
         # Đánh dấu đáp án đúng lên ảnh và lấy đáp án học sinh
         marked_image_path, student_data = mark_correct_answers_on_image(
             file_path,
-            final_answers,
+            exam_list,
             output_dir="output"
         )
 
@@ -337,8 +374,15 @@ async def mark_correct_answers_endpoint(
             # Có lỗi (như không tìm thấy mã đề), thêm debug image path vào response
             print(f"⚠️ Error in marking process: {student_data['error']}")
 
-            # Tạo summary cơ bản
-            summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
+            # Tạo summary cơ bản (không có đáp án đúng cụ thể do lỗi)
+            summary = {
+                "total_questions": {"part1": 0, "part2": 0, "part3": 0},
+                "marked_circles": {"part1": 0, "part2": 0, "part3": 0},
+                "correct_matches": {"part1": [], "part2": [], "part3": []},
+                "incorrect_missing": {"part1": [], "part2": [], "part3": []},
+                "unmarked_patterns": {"part1": [], "part2": [], "part3": []},
+                "note": "Summary không đầy đủ do có lỗi trong quá trình xử lý"
+            }
 
             # Thêm debug image path và summary vào error response
             student_data["summary"] = summary
@@ -371,8 +415,26 @@ async def mark_correct_answers_endpoint(
             return JSONResponse(content=student_data)
         else:
             # Thành công
-            # Tạo summary thông tin
-            summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
+            # Tạo summary thông tin - tìm đáp án đúng từ exam_list dựa trên exam_code
+            summary = {
+                "total_questions": {"part1": 0, "part2": 0, "part3": 0},
+                "marked_circles": {"part1": 0, "part2": 0, "part3": 0},
+                "correct_matches": {"part1": [], "part2": [], "part3": []},
+                "incorrect_missing": {"part1": [], "part2": [], "part3": []},
+                "unmarked_patterns": {"part1": [], "part2": [], "part3": []},
+                "note": "Summary được tạo từ dữ liệu exam_list"
+            }
+
+            # Nếu có exam_code và tìm được đáp án đúng, tạo summary chi tiết
+            if exam_code:
+                try:
+                    from api.answer_marking_service import find_exam_code_in_list
+                    matched_exam = find_exam_code_in_list(exam_code, exam_list)
+                    correct_answers = matched_exam.get("answer_json", [])
+                    summary = create_answer_summary(correct_answers, all_circles, student_answers_raw)
+                except Exception as e:
+                    print(f"⚠️ Could not create detailed summary: {e}")
+                    # Giữ summary cơ bản đã tạo ở trên
 
             # student_data đã được chuyển đổi sang format mới trong answer_marking_service
             response_data = student_data

@@ -1087,13 +1087,27 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
         correct_answers = matched_exam.get("answer_json", [])
         grading_session_id = matched_exam.get("grading_session_id", None)
     except ValueError as e:
-        # Trả về lỗi nếu không tìm thấy mã đề
-        return "", {
-            "error": str(e),
-            "student_code": student_id,
-            "exam_code": exam_code,
-            "available_exam_codes": [exam.get("code", "") for exam in exam_list]
-        }
+        # Kiểm tra xem có phải định dạng cũ không (có mã đề "000")
+        legacy_exam = None
+        for exam in exam_list:
+            if exam.get("code", "") == "000":
+                legacy_exam = exam
+                break
+
+        if legacy_exam:
+            # Sử dụng định dạng cũ
+            print(f"🔄 Using legacy format as fallback for exam_code '{exam_code}'")
+            matched_exam = legacy_exam
+            correct_answers = matched_exam.get("answer_json", [])
+            grading_session_id = matched_exam.get("grading_session_id", None)
+        else:
+            # Trả về lỗi nếu không tìm thấy mã đề
+            return "", {
+                "error": str(e),
+                "student_code": student_id,
+                "exam_code": exam_code,
+                "available_exam_codes": [exam.get("code", "") for exam in exam_list]
+            }
 
     # Sử dụng formatted_answers từ detect_circles thay vì parse lại
     student_answers_formatted = detection_results.get("formatted_answers", {
@@ -1308,21 +1322,22 @@ def create_marking_report(multiple_part1: Dict[str, List[str]],
     return report
 
 
-def create_answer_summary(correct_answers: Dict[str, Any], all_circles: List[str], student_answers: List[str] = None) -> Dict[str, Any]:
+def create_answer_summary(correct_answers, all_circles: List[str], student_answers: List[str] = None) -> Dict[str, Any]:
     """
     Tạo summary thông tin về việc đánh dấu đáp án
-    
+    Hỗ trợ cả format cũ (Dict) và format mới (List)
+
     Args:
-        correct_answers: Dict chứa đáp án đúng
+        correct_answers: Dict hoặc List chứa đáp án đúng
         all_circles: List tất cả circle labels
         student_answers: List đáp án học sinh đã tô
-        
+
     Returns:
         Dict chứa thông tin summary
     """
     if student_answers is None:
         student_answers = []
-        
+
     marked_circles_patterns = parse_correct_answers(correct_answers)
     
     summary = {

@@ -1,0 +1,337 @@
+{
+  "id": 2,
+  "name": "Hoá hk1",
+  "userId": "d040299b-32d7-484e-813c-4b5fc043c0a1",
+  "status": "ACTIVE",
+  "sectionConfigJson": [
+    {
+      "sectionType": "MULTIPLE_CHOICE",
+      "sectionOrder": 1,
+      "questionCount": 40,
+      "pointsPerQuestion": 0.25
+    },
+    {
+      "rule": {
+        "1": 0.1,
+        "2": 0.25,
+        "3": 0.5,
+        "4": 1
+      },
+      "sectionType": "TRUE_FALSE",
+      "sectionOrder": 2,
+      "questionCount": 8
+    },
+    {
+      "sectionType": "ESSAY",
+      "sectionOrder": 3,
+      "questionCount": 6,
+      "pointsPerQuestion": 0.5
+    }
+  ],
+  "book_type_id": "377a7a9d-1a43-4d2c-9429-77e80de57343",
+  "omr_template": {
+    "id": 1,
+    "name": "QN2025 - A4",
+    "status": "ACTIVE",
+    "sample_image_url": "https://hxjigovnfjyaepkgvamd.supabase.co/storage/v1/object/public/planbook/QN2025_A4.pdf",
+    "created_at": "2025-09-02T18:32:48.82153",
+    "updated_at": "2025-09-02T18:32:48.82153"
+  },
+  "answer_sheet_keys": [
+    {
+      "id": 1,
+      "code": "095",
+      "grading_session_id": 2,
+      "answer_json": [
+        {
+          "sectionOrder": 1,
+          "sectionType": "MULTIPLE_CHOICE",
+          "questions": [
+            {"questionNumber": 1, "answer": "A"},
+            {"questionNumber": 2, "answer": "B"},
+            {"questionNumber": 3, "answer": "B"},
+            {"questionNumber": 4, "answer": "B"},
+            {"questionNumber": 5, "answer": "C"},
+            {"questionNumber": 6, "answer": "A"},
+            {"questionNumber": 7, "answer": "D"},
+            {"questionNumber": 8, "answer": "C"},
+            {"questionNumber": 9, "answer": "A"},
+            {"questionNumber": 10, "answer": "B"},
+            {"questionNumber": 11, "answer": "B"},
+            {"questionNumber": 12, "answer": "D"},
+            {"questionNumber": 13, "answer": "D"},
+            {"questionNumber": 14, "answer": "A"},
+            {"questionNumber": 15, "answer": "A"},
+            {"questionNumber": 16, "answer": "C"},
+            {"questionNumber": 17, "answer": "C"},
+            {"questionNumber": 18, "answer": "C"},
+            {"questionNumber": 19, "answer": "A"},
+            {"questionNumber": 20, "answer": "B"},
+            {"questionNumber": 21, "answer": "D"},
+            {"questionNumber": 22, "answer": "C"},
+            {"questionNumber": 23, "answer": "A"},
+            {"questionNumber": 24, "answer": "B"},
+            {"questionNumber": 25, "answer": "A"},
+            {"questionNumber": 26, "answer": "C"},
+            {"questionNumber": 27, "answer": "D"},
+            {"questionNumber": 28, "answer": "A"},
+            {"questionNumber": 29, "answer": "D"},
+            {"questionNumber": 30, "answer": "A"},
+            {"questionNumber": 31, "answer": "C"},
+            {"questionNumber": 32, "answer": "D"},
+            {"questionNumber": 33, "answer": "A"},
+            {"questionNumber": 34, "answer": "A"},
+            {"questionNumber": 35, "answer": "D"},
+            {"questionNumber": 36, "answer": "B"},
+            {"questionNumber": 37, "answer": "C"},
+            {"questionNumber": 38, "answer": "C"},
+            {"questionNumber": 39, "answer": "B"},
+            {"questionNumber": 40, "answer": "A"}
+          ]
+        },
+        {
+          "sectionOrder": 2,
+          "sectionType": "TRUE_FALSE",
+          "questions": [
+            {
+              "questionNumber": 1,
+              "answer": {
+                "a": "S",
+                "b": "Đ",
+                "c": "S",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 2,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "Đ",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 3,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "S",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 4,
+              "answer": {
+                "a": "Đ",
+                "b": "S",
+                "c": "Đ",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 5,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "S",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 6,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "Đ",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 7,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "Đ",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 8,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "S",
+                "d": "Đ"
+              }
+            }
+          ]
+        },
+        {
+          "sectionOrder": 3,
+          "sectionType": "ESSAY_CODE",
+          "questions": [
+            {"questionNumber": 1, "answer": "-3,2"},
+            {"questionNumber": 2, "answer": "10"},
+            {"questionNumber": 3, "answer": "2025"},
+            {"questionNumber": 4, "answer": "129"},
+            {"questionNumber": 5, "answer": "4"},
+            {"questionNumber": 6, "answer": "-4"}
+          ]
+        }
+      ],
+      "total_submissions": 0,
+      "created_at": "2025-09-03T01:57:33.067239",
+      "updated_at": "2025-09-03T15:00:33.841824"
+    },
+    {
+      "id": 2,
+      "code": "342",
+      "grading_session_id": 2,
+      "answer_json": [
+        {
+          "sectionOrder": 1,
+          "sectionType": "MULTIPLE_CHOICE",
+          "questions": [
+            {"questionNumber": 1, "answer": "B"},
+            {"questionNumber": 2, "answer": "A"},
+            {"questionNumber": 3, "answer": "C"},
+            {"questionNumber": 4, "answer": "D"},
+            {"questionNumber": 5, "answer": "A"},
+            {"questionNumber": 6, "answer": "B"},
+            {"questionNumber": 7, "answer": "C"},
+            {"questionNumber": 8, "answer": "D"},
+            {"questionNumber": 9, "answer": "B"},
+            {"questionNumber": 10, "answer": "A"},
+            {"questionNumber": 11, "answer": "D"},
+            {"questionNumber": 12, "answer": "C"},
+            {"questionNumber": 13, "answer": "A"},
+            {"questionNumber": 14, "answer": "B"},
+            {"questionNumber": 15, "answer": "C"},
+            {"questionNumber": 16, "answer": "D"},
+            {"questionNumber": 17, "answer": "A"},
+            {"questionNumber": 18, "answer": "B"},
+            {"questionNumber": 19, "answer": "C"},
+            {"questionNumber": 20, "answer": "D"},
+            {"questionNumber": 21, "answer": "A"},
+            {"questionNumber": 22, "answer": "B"},
+            {"questionNumber": 23, "answer": "C"},
+            {"questionNumber": 24, "answer": "D"},
+            {"questionNumber": 25, "answer": "B"},
+            {"questionNumber": 26, "answer": "A"},
+            {"questionNumber": 27, "answer": "C"},
+            {"questionNumber": 28, "answer": "D"},
+            {"questionNumber": 29, "answer": "A"},
+            {"questionNumber": 30, "answer": "B"},
+            {"questionNumber": 31, "answer": "D"},
+            {"questionNumber": 32, "answer": "C"},
+            {"questionNumber": 33, "answer": "B"},
+            {"questionNumber": 34, "answer": "A"},
+            {"questionNumber": 35, "answer": "C"},
+            {"questionNumber": 36, "answer": "D"},
+            {"questionNumber": 37, "answer": "A"},
+            {"questionNumber": 38, "answer": "B"},
+            {"questionNumber": 39, "answer": "D"},
+            {"questionNumber": 40, "answer": "C"}
+          ]
+        },
+        {
+          "sectionOrder": 2,
+          "sectionType": "TRUE_FALSE",
+          "questions": [
+            {
+              "questionNumber": 1,
+              "answer": {
+                "a": "Đ",
+                "b": "S",
+                "c": "Đ",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 2,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "S",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 3,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "Đ",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 4,
+              "answer": {
+                "a": "S",
+                "b": "Đ",
+                "c": "S",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 5,
+              "answer": {
+                "a": "S",
+                "b": "S",
+                "c": "Đ",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 6,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "S",
+                "d": "S"
+              }
+            },
+            {
+              "questionNumber": 7,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "S",
+                "d": "Đ"
+              }
+            },
+            {
+              "questionNumber": 8,
+              "answer": {
+                "a": "Đ",
+                "b": "Đ",
+                "c": "Đ",
+                "d": "S"
+              }
+            }
+          ]
+        },
+        {
+          "sectionOrder": 3,
+          "sectionType": "ESSAY_CODE",
+          "questions": [
+            {"questionNumber": 1, "answer": "-3,2"},
+            {"questionNumber": 2, "answer": "10"},
+            {"questionNumber": 3, "answer": "2025"},
+            {"questionNumber": 4, "answer": "129"},
+            {"questionNumber": 5, "answer": "4"},
+            {"questionNumber": 6, "answer": "-4"}
+          ]
+        }
+      ],
+      "total_submissions": 0,
+      "created_at": "2025-09-03T01:57:33.067239",
+      "updated_at": "2025-09-03T15:00:33.841824"
+    }
+  ],
+  "total_submissions": 0,
+  "created_at": "2025-09-03T00:35:09.767504",
+  "updated_at": "2025-09-03T00:35:09.767504"
+}
