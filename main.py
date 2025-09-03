@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
 import uvicorn
 import os
@@ -14,6 +15,7 @@ from api.main_service import process_image as process_main_image
 from api.omr_service import process_image as process_omr_image
 from api.circle_detection_service import detect_circles
 from api.answer_marking_service import mark_correct_answers_on_image, create_answer_summary
+from api.black_square_detection_service import detect_all_black_squares
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -42,8 +44,16 @@ class CorrectAnswersRequest(BaseModel):
     correct_answers: dict
 
 UPLOAD_DIR = "temp_uploads"
+OUTPUT_DIR = "output"
+
+# Create directories if they don't exist
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
+
+# Mount static files for serving debug images
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 @app.get("/")
 def read_root():
@@ -334,6 +344,237 @@ async def mark_correct_answers_endpoint(
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
         # marked_image_path is kept for user to access the result
+
+
+@app.post("/detect-black-squares/")
+async def detect_black_squares_endpoint(
+    file: UploadFile = File(..., description="Image file to detect black squares in"),
+    debug: bool = Form(False, description="Whether to return debug image")
+):
+    """
+    API endpoint để detect tất cả 31 ô vuông đen trong ảnh OMR
+
+    Args:
+        file: File ảnh upload
+        debug: Có trả về ảnh debug không (mặc định False)
+
+    Returns:
+        JSONResponse chứa thông tin về tất cả ô vuông đen được detect
+    """
+    file_path = None
+
+    try:
+        # Create a unique filename
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Save the uploaded file
+        with open(file_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+        logger.info(f"Processing image for black square detection: {file.filename}")
+
+        # Detect all black squares using the service
+        results, debug_image_path = detect_all_black_squares(file_path, debug=debug, output_dir="output")
+
+        # Prepare response data
+        response_data = {
+            "success": True,
+            "message": f"Đã detect {results['found_squares']}/{results['total_squares']} ô vuông đen",
+            "results": results
+        }
+
+        # Add debug image URL if requested
+        if debug and debug_image_path:
+            # Convert file path to URL
+            filename = os.path.basename(debug_image_path)
+            debug_image_url = f"/output/{filename}"
+            response_data["debug_image_path"] = debug_image_path
+            response_data["debug_image_url"] = debug_image_url
+
+        logger.info(f"Black square detection completed: {results['found_squares']}/{results['total_squares']} squares found")
+
+        return JSONResponse(content=response_data)
+
+    except ValueError as e:
+        logger.error(f"ValueError in black square detection for {file.filename}: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Lỗi xử lý ảnh",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        # Log the actual error for debugging purposes
+        logger.error(f"Error detecting black squares in image {file.filename}: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+
+        # Return user-friendly Vietnamese error message
+        error_message = "Có lỗi xảy ra trong quá trình detect ô vuông đen. Vui lòng thử lại với ảnh rõ nét hơn."
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": error_message,
+                "message": str(e)
+            }
+        )
+    finally:
+        # Clean up the uploaded file
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Cleaned up temporary file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {file_path}: {e}")
+
+
+@app.post("/detect-black-squares-url/")
+async def detect_black_squares_from_url_endpoint(
+    request: ImageUrlRequest,
+    debug: bool = Form(False, description="Whether to return debug image")
+):
+    """
+    API endpoint để detect tất cả 31 ô vuông đen trong ảnh từ URL
+
+    Args:
+        request: ImageUrlRequest chứa image_url
+        debug: Có trả về ảnh debug không (mặc định False)
+
+    Returns:
+        JSONResponse chứa thông tin về tất cả ô vuông đen được detect
+    """
+    temp_file_path = None
+
+    try:
+        # Validate URL
+        if not request.image_url or not request.image_url.strip():
+            raise HTTPException(status_code=400, detail="URL ảnh không được để trống")
+
+        # Parse URL để lấy extension
+        parsed_url = urlparse(request.image_url)
+        path = parsed_url.path
+
+        # Lấy extension từ URL, nếu không có thì mặc định là .jpg
+        file_extension = os.path.splitext(path)[1] if os.path.splitext(path)[1] else '.jpg'
+
+        # Tạo tên file tạm thời
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        temp_file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Tải ảnh từ URL
+        logger.info(f"Downloading image from URL for black square detection: {request.image_url}")
+
+        # Set headers để giả lập browser request
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        # Tải ảnh với timeout
+        response = requests.get(request.image_url, headers=headers, timeout=30, stream=True)
+        response.raise_for_status()
+
+        # Kiểm tra content type
+        content_type = response.headers.get('content-type', '').lower()
+        if not any(img_type in content_type for img_type in ['image/jpeg', 'image/jpg', 'image/png', 'image/bmp', 'image/tiff']):
+            raise HTTPException(status_code=400, detail="URL không trả về ảnh hợp lệ")
+
+        # Lưu ảnh vào file tạm thời
+        with open(temp_file_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        logger.info(f"Image downloaded successfully: {temp_file_path}")
+
+        # Kiểm tra kích thước file
+        file_size = os.path.getsize(temp_file_path)
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="File ảnh tải về có kích thước 0 bytes")
+
+        logger.info(f"Downloaded file size: {file_size} bytes")
+
+        # Detect all black squares using the service
+        results, debug_image_path = detect_all_black_squares(temp_file_path, debug=debug, output_dir="output")
+
+        # Prepare response data
+        response_data = {
+            "success": True,
+            "message": f"Đã detect {results['found_squares']}/{results['total_squares']} ô vuông đen",
+            "source_url": request.image_url,
+            "processing_method": "url_download",
+            "results": results
+        }
+
+        # Add debug image URL if requested
+        if debug and debug_image_path:
+            # Convert file path to URL
+            filename = os.path.basename(debug_image_path)
+            debug_image_url = f"/output/{filename}"
+            response_data["debug_image_path"] = debug_image_path
+            response_data["debug_image_url"] = debug_image_url
+
+        logger.info(f"Black square detection from URL completed: {results['found_squares']}/{results['total_squares']} squares found")
+
+        return JSONResponse(content=response_data)
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error downloading image from URL {request.image_url}: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Không thể tải ảnh từ URL. Vui lòng kiểm tra lại đường dẫn!",
+                "message": f"Lỗi tải ảnh: {str(e)}"
+            }
+        )
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={
+                "success": False,
+                "error": e.detail,
+                "message": e.detail
+            }
+        )
+    except ValueError as e:
+        logger.error(f"ValueError in black square detection from URL {request.image_url}: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Lỗi xử lý ảnh",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error detecting black squares from URL {request.image_url}: {str(e)}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+
+        # Return user-friendly Vietnamese error message
+        error_message = "Có lỗi xảy ra trong quá trình detect ô vuông đen. Vui lòng thử lại với ảnh rõ nét hơn."
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": error_message,
+                "message": str(e)
+            }
+        )
+    finally:
+        # Clean up temporary files
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {temp_file_path}: {e}")
+
 
 if __name__ == "__main__":
     # Configure uvicorn with increased limits for large file uploads

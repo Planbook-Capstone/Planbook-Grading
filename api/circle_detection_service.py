@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import base64
 
 
 def _process_part3_circles(all_circles, filled_circles, part_number, debug_image):
@@ -158,10 +159,7 @@ def _process_id_student_circles(all_circles, filled_circles, debug_image):
     
     # Construct student ID from filled digits (left to right)
     student_id = "".join(student_id_digits).rstrip()  # Remove trailing empty strings
-    
-    return output_data, student_answers, student_id
-    student_id = "".join(student_id_digits).rstrip()  # Remove trailing empty strings
-    
+
     return output_data, student_answers, student_id
 
 
@@ -170,10 +168,10 @@ def _get_digit_from_y_coordinate_id(y_coord):
     Determine which digit (0-9) based on y coordinate for student ID
     Assumes digits are arranged vertically in order 0,1,2,3,4,5,6,7,8,9
     """
-    # Dựa trên dữ liệu thực tế: y từ 260 đến 546
-    # Digit 0 ở y ≈ 260, digit 9 ở y ≈ 546
-    base_y = 260  # y coordinate của digit 0
-    max_y = 546   # y coordinate của digit 9
+    # Dựa trên dữ liệu thực tế: y từ 260 đến 576 (với ROI mới bắt đầu từ y=230)
+    # Digit 0 ở y ≈ 260, digit 9 ở y ≈ 576
+    base_y = 240  # y coordinate của digit 0
+    max_y = 560   # y coordinate của digit 9
     
     # Tính spacing cho 10 digits (0-9)
     digit_spacing = (max_y - base_y) / 9  # Chia khoảng cách cho 9 khoảng (0->1, 1->2, ..., 8->9)
@@ -335,7 +333,28 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
 
 def _detect_circles_in_roi(image, roi_coords):
     x_start, y_start, x_end, y_end = roi_coords
+
+    # Validate ROI coordinates
+    if image is None or len(image.shape) < 2:
+        print(f"❌ Invalid image provided to _detect_circles_in_roi")
+        return [], []
+
+    img_height, img_width = image.shape[:2]
+
+    # Ensure coordinates are within image boundaries
+    x_start = max(0, min(x_start, img_width - 1))
+    y_start = max(0, min(y_start, img_height - 1))
+    x_end = max(x_start + 1, min(x_end, img_width))
+    y_end = max(y_start + 1, min(y_end, img_height))
+
+    # Extract ROI
     roi = image[y_start:y_end, x_start:x_end]
+
+    # Validate ROI is not empty
+    if roi.size == 0 or roi.shape[0] == 0 or roi.shape[1] == 0:
+        print(f"❌ Empty ROI extracted: coords=({x_start},{y_start},{x_end},{y_end}), roi_shape={roi.shape}")
+        return [], []
+
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred_roi = cv2.medianBlur(gray_roi, 5)
 
@@ -453,12 +472,56 @@ def detect_circles(image_path, debug=False):
     if image is None:
         raise ValueError(f"Could not read image from {image_path}")
 
-    # Define ROIs
-    roi_part_id_student = (910, 200 , 1050, 600)  # ROI for student ID section
-    roi_part_exam_code = (1080, 200, 1150, 600)     # ROI for exam code section (3 columns)
-    roi_part1 = (200, 680, 1200, 950)
-    roi_part2 = (200, 990, 1200, 1163)
-    roi_part3 = (200, 1220, 1110, 1558) # Adjusted coordinates for Part 3
+    # Print image dimensions for debugging
+    img_height, img_width = image.shape[:2]
+    print(f"🔍 Image dimensions: {img_width}x{img_height}")
+
+    # Define ROIs for reference dimensions (these coordinates are designed for a specific image size)
+    # Reference dimensions that the ROI coordinates were designed for
+    reference_width, reference_height = 1200, 1600  # Approximate reference dimensions
+
+    # Original ROI coordinates (designed for reference dimensions)
+    roi_part_id_student_ref = (900, 230 , 1050, 570)  # ROI for student ID section
+    roi_part_exam_code_ref = (1050, 230, 1152, 570)     # ROI for exam code section (3 columns)
+    roi_part1_ref = (200, 680, 1200, 950)
+    roi_part2_ref = (200, 990, 1200, 1163)
+    roi_part3_ref = (200, 1220, 1110, 1558) # Adjusted coordinates for Part 3
+
+    # Calculate scaling factors
+    scale_x = img_width / reference_width
+    scale_y = img_height / reference_height
+    print(f"🔧 Scaling factors: x={scale_x:.3f}, y={scale_y:.3f}")
+
+    # Scale ROI coordinates to match actual image dimensions
+    def scale_roi(roi_ref):
+        x1, y1, x2, y2 = roi_ref
+        return (
+            int(x1 * scale_x),
+            int(y1 * scale_y),
+            int(x2 * scale_x),
+            int(y2 * scale_y)
+        )
+
+    roi_part_id_student = scale_roi(roi_part_id_student_ref)
+    roi_part_exam_code = scale_roi(roi_part_exam_code_ref)
+    roi_part1 = scale_roi(roi_part1_ref)
+    roi_part2 = scale_roi(roi_part2_ref)
+    roi_part3 = scale_roi(roi_part3_ref)
+
+    # Validate scaled ROI coordinates
+    rois_to_check = [
+        ("Student ID", roi_part_id_student),
+        ("Exam Code", roi_part_exam_code),
+        ("Part 1", roi_part1),
+        ("Part 2", roi_part2),
+        ("Part 3", roi_part3)
+    ]
+
+    for roi_name, (x1, y1, x2, y2) in rois_to_check:
+        if x2 > img_width or y2 > img_height or x1 < 0 or y1 < 0:
+            print(f"⚠️  {roi_name} ROI ({x1},{y1},{x2},{y2}) extends beyond image bounds ({img_width}x{img_height})")
+        else:
+            print(f"✅ {roi_name} ROI ({x1},{y1},{x2},{y2}) is within image bounds")
 
     debug_image = image.copy() if debug else None
     all_answers = []
@@ -516,13 +579,38 @@ def detect_circles(image_path, debug=False):
     all_answers.extend(part3_data)
     student_answers.extend(part3_student)
 
+    # Tạo các ảnh debug
+    debug_images = {}
     debug_image_path = None
+
     if debug and debug_image is not None:
         base_name = os.path.splitext(os.path.basename(image_path))[0]
         output_dir = "debug_circles"
         os.makedirs(output_dir, exist_ok=True)
         debug_image_path = os.path.join(output_dir, f"{base_name}_circles_debug.png")
         cv2.imwrite(debug_image_path, debug_image)
+
+        # Tạo ảnh debug ROI
+        roi_debug_image = create_roi_debug_image(image, image_path)
+        roi_debug_path = os.path.join(output_dir, f"{base_name}_roi_debug.png")
+        cv2.imwrite(roi_debug_path, roi_debug_image)
+
+        # Tạo ảnh debug circles detection
+        circles_debug_image = create_circles_detection_debug_image(image, image_path)
+        circles_debug_path = os.path.join(output_dir, f"{base_name}_circles_detection_debug.png")
+        cv2.imwrite(circles_debug_path, circles_debug_image)
+
+        # Chuyển thành base64 để trả về trong API
+        debug_images = {
+            "roi_debug": image_to_base64(roi_debug_image),
+            "circles_detection_debug": image_to_base64(circles_debug_image),
+            "original_debug": image_to_base64(debug_image)
+        }
+
+        print(f"Debug images saved:")
+        print(f"  - ROI debug: {roi_debug_path}")
+        print(f"  - Circles detection: {circles_debug_path}")
+        print(f"  - Original debug: {debug_image_path}")
 
     # Format student answers into structured format
     formatted_answers = _format_student_answers(student_answers)
@@ -532,7 +620,8 @@ def detect_circles(image_path, debug=False):
         "student_answers": student_answers,
         "student_id": student_id,
         "exam_code": exam_code,
-        "formatted_answers": formatted_answers
+        "formatted_answers": formatted_answers,
+        "debug_images": debug_images
     }, debug_image_path
 
 
@@ -600,3 +689,165 @@ def _format_student_answers(student_answers):
             formatted["part3"][question_num] = answer_str
 
     return formatted
+
+
+def create_roi_debug_image(image: np.ndarray, image_path: str) -> np.ndarray:
+    """
+    Tạo ảnh debug hiển thị các ROI được định nghĩa
+
+    Args:
+        image: Ảnh gốc
+        image_path: Đường dẫn ảnh (để lấy tên file)
+
+    Returns:
+        NumPy array của ảnh debug ROI
+    """
+    debug_image = image.copy()
+
+    # Define ROIs (giống như trong detect_circles)
+    roi_part_id_student = (900, 230, 1050, 570)
+    roi_part_exam_code = (1050, 230, 1152, 570)
+    roi_part1 = (200, 680, 1200, 950)
+    roi_part2 = (200, 990, 1200, 1163)
+    roi_part3 = (200, 1220, 1110, 1558)
+
+    # Vẽ các ROI với màu sắc khác nhau
+    rois = [
+        (roi_part_id_student, (255, 255, 0), "Student ID"),
+        (roi_part_exam_code, (255, 0, 255), "Exam Code"),
+        (roi_part1, (255, 0, 0), "Part 1"),
+        (roi_part2, (0, 0, 255), "Part 2"),
+        (roi_part3, (0, 255, 255), "Part 3")
+    ]
+
+    for roi, color, label in rois:
+        x1, y1, x2, y2 = roi
+        # Vẽ khung ROI
+        cv2.rectangle(debug_image, (x1, y1), (x2, y2), color, 3)
+
+        # Vẽ label với background
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+
+        # Background cho text
+        cv2.rectangle(debug_image,
+                     (x1, y1 - text_size[1] - 10),
+                     (x1 + text_size[0] + 10, y1),
+                     color, -1)
+
+        # Text
+        cv2.putText(debug_image, label, (x1 + 5, y1 - 5),
+                   font, font_scale, (255, 255, 255), thickness)
+
+        # Thêm thông tin kích thước
+        size_text = f"{x2-x1}x{y2-y1}"
+        cv2.putText(debug_image, size_text, (x1 + 5, y1 + 25),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    # Thêm title
+    cv2.putText(debug_image, "ROI Debug - All Regions", (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
+    cv2.putText(debug_image, "ROI Debug - All Regions", (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+    return debug_image
+
+
+def create_circles_detection_debug_image(image: np.ndarray, image_path: str) -> np.ndarray:
+    """
+    Tạo ảnh debug hiển thị tất cả các ô tròn được detect
+
+    Args:
+        image: Ảnh gốc
+        image_path: Đường dẫn ảnh
+
+    Returns:
+        NumPy array của ảnh debug circles detection
+    """
+    debug_image = image.copy()
+
+    # Define ROIs
+    roi_part_id_student = (900, 230, 1050, 570)
+    roi_part_exam_code = (1050, 230, 1152, 570)
+    roi_part1 = (200, 680, 1200, 950)
+    roi_part2 = (200, 990, 1200, 1163)
+    roi_part3 = (200, 1220, 1110, 1558)
+
+    total_circles = 0
+    total_filled = 0
+
+    # Process each ROI và vẽ circles
+    rois_info = [
+        (roi_part_id_student, (255, 255, 0), "ID"),
+        (roi_part_exam_code, (255, 0, 255), "EX"),
+        (roi_part1, (255, 0, 0), "P1"),
+        (roi_part2, (0, 0, 255), "P2"),
+        (roi_part3, (0, 255, 255), "P3")
+    ]
+
+    for roi, color, prefix in rois_info:
+        all_circles, filled_circles = _detect_circles_in_roi(image, roi)
+
+        # Vẽ tất cả circles (màu nhạt)
+        for x, y, r in all_circles:
+            cv2.circle(debug_image, (x, y), r, tuple(c//2 for c in color), 1)
+            total_circles += 1
+
+        # Vẽ filled circles (màu đậm)
+        for x, y, r in filled_circles:
+            cv2.circle(debug_image, (x, y), r, color, 2)
+            cv2.circle(debug_image, (x, y), 3, color, -1)  # Điểm tâm
+            total_filled += 1
+
+        # Vẽ khung ROI nhẹ
+        x1, y1, x2, y2 = roi
+        cv2.rectangle(debug_image, (x1, y1), (x2, y2), color, 1)
+
+        # Thông tin số lượng circles
+        info_text = f"{prefix}: {len(filled_circles)}/{len(all_circles)}"
+        cv2.putText(debug_image, info_text, (x1, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    # Thêm legend và thống kê
+    legend_y = 50
+    cv2.putText(debug_image, "Circles Detection Debug", (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
+    cv2.putText(debug_image, "Circles Detection Debug", (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+    cv2.putText(debug_image, f"Total: {total_filled}/{total_circles} circles filled",
+               (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+    cv2.putText(debug_image, f"Total: {total_filled}/{total_circles} circles filled",
+               (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+    # Legend cho màu sắc
+    legend_items = [
+        ("Light circles: All detected", (150, 150, 150)),
+        ("Bold circles: Filled/Selected", (255, 255, 255))
+    ]
+
+    for i, (text, color) in enumerate(legend_items):
+        y_pos = legend_y + 25 + (i * 20)
+        cv2.putText(debug_image, text, (10, y_pos),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    return debug_image
+
+
+def image_to_base64(image_array: np.ndarray) -> str:
+    """
+    Chuyển đổi ảnh numpy array thành base64 string
+
+    Args:
+        image_array: NumPy array của ảnh
+
+    Returns:
+        Base64 string của ảnh
+    """
+    # Encode ảnh thành PNG
+    _, buffer = cv2.imencode('.png', image_array)
+    # Chuyển thành base64
+    img_base64 = base64.b64encode(buffer).decode('utf-8')
+    return f"data:image/png;base64,{img_base64}"

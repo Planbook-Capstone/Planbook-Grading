@@ -504,7 +504,7 @@ def process_image(image_path, output_dir, save_debug=False):
 
     M = cv2.getPerspectiveTransform(ordered_points, dst_pts)
     # Sử dụng INTER_CUBIC cho chất lượng tốt hơn, tránh mờ ảnh
-    warped = cv2.warpPerspective(image, M, (width, height), interpolation=cv2.INTER_CUBIC)
+    warped = cv2.warpPerspective(image, M, (width, height), flags=cv2.INTER_CUBIC)
 
     # Debug ảnh marker
     debug_image = image.copy()

@@ -316,10 +316,10 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
 def image_to_base64(image_array: np.ndarray) -> str:
     """
     Chuyển đổi ảnh numpy array thành base64 string
-    
+
     Args:
         image_array: NumPy array của ảnh
-        
+
     Returns:
         Base64 string của ảnh
     """
@@ -328,6 +328,197 @@ def image_to_base64(image_array: np.ndarray) -> str:
     # Chuyển thành base64
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     return f"data:image/png;base64,{img_base64}"
+
+
+def create_student_answers_debug_image(image: np.ndarray, student_answers: List[str], all_circles: List[str]) -> np.ndarray:
+    """
+    Tạo ảnh debug hiển thị đáp án của học sinh
+
+    Args:
+        image: Ảnh gốc
+        student_answers: List các circle labels mà học sinh đã tô
+        all_circles: List tất cả circle labels có thể
+
+    Returns:
+        NumPy array của ảnh debug
+    """
+    debug_image = image.copy()
+
+    # Đánh dấu tất cả các ô có thể (màu xám nhạt)
+    for circle_label in all_circles:
+        x, y = extract_coordinates_from_label(circle_label)
+        if x > 0 and y > 0:
+            cv2.circle(debug_image, (x, y), 8, (200, 200, 200), 1)  # Màu xám nhạt
+
+    # Đánh dấu các ô học sinh đã tô (màu xanh dương đậm)
+    for circle_label in student_answers:
+        x, y = extract_coordinates_from_label(circle_label)
+        if x > 0 and y > 0:
+            cv2.circle(debug_image, (x, y), 10, (255, 0, 0), 3)  # Màu xanh dương đậm
+
+            # Thêm text để hiển thị thông tin chi tiết
+            parts = circle_label.split("_")
+            if len(parts) >= 3:
+                if parts[0] == "part1":
+                    # part1_1_a_x_y -> "1A"
+                    text = f"{parts[1]}{parts[2].upper()}"
+                elif parts[0] == "part2":
+                    # part2_1_a_D_x_y -> "1a:D"
+                    text = f"{parts[1]}{parts[2]}:{parts[3]}"
+                elif parts[0] == "part3":
+                    # part3_1_2_1_x_y -> "1:2@1"
+                    symbol = parts[2]
+                    if symbol == "minus":
+                        symbol = "-"
+                    elif symbol == "comma":
+                        symbol = ","
+                    text = f"{parts[1]}:{symbol}@{parts[3]}"
+                elif parts[0] == "id":
+                    # id_student_1_2_x_y -> "ID:1@2"
+                    text = f"ID:{parts[2]}@{parts[3]}"
+                elif parts[0] == "exam":
+                    # exam_code_1_2_x_y -> "EX:1@2"
+                    text = f"EX:{parts[2]}@{parts[3]}"
+                else:
+                    text = f"{parts[0][:2]}"
+
+                # Vẽ text với background
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.4
+                thickness = 1
+                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+
+                # Vẽ background cho text
+                cv2.rectangle(debug_image,
+                            (x - text_size[0]//2 - 2, y - 20 - text_size[1] - 2),
+                            (x + text_size[0]//2 + 2, y - 20 + 2),
+                            (255, 255, 255), -1)
+
+                # Vẽ text
+                cv2.putText(debug_image, text,
+                          (x - text_size[0]//2, y - 20),
+                          font, font_scale, (0, 0, 0), thickness)
+
+    # Thêm legend
+    legend_y = 30
+    cv2.putText(debug_image, "Student Answers Debug", (10, legend_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+    legend_y += 25
+    cv2.circle(debug_image, (20, legend_y), 8, (200, 200, 200), 1)
+    cv2.putText(debug_image, "All possible circles", (40, legend_y + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+
+    legend_y += 20
+    cv2.circle(debug_image, (20, legend_y), 10, (255, 0, 0), 3)
+    cv2.putText(debug_image, f"Student selected ({len(student_answers)} circles)", (40, legend_y + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+
+    return debug_image
+
+
+def create_detailed_debug_image(image: np.ndarray, student_answers: List[str], all_circles: List[str],
+                               multiple_part1: Dict[str, List[str]], multiple_part2: Dict[str, List[str]],
+                               multiple_part3: Dict[str, List[str]], missing_answers: Dict[str, List[str]]) -> np.ndarray:
+    """
+    Tạo ảnh debug chi tiết với tất cả các vấn đề được đánh dấu
+
+    Args:
+        image: Ảnh gốc
+        student_answers: List các circle labels mà học sinh đã tô
+        all_circles: List tất cả circle labels có thể
+        multiple_part1: Dict các câu Part 1 có nhiều đáp án
+        multiple_part2: Dict các câu Part 2 có nhiều đáp án
+        multiple_part3: Dict các vấn đề Part 3
+        missing_answers: Dict các đáp án bị thiếu
+
+    Returns:
+        NumPy array của ảnh debug chi tiết
+    """
+    debug_image = image.copy()
+
+    # Set để theo dõi các circles đã được đánh dấu
+    marked_circles = set()
+
+    # 1. Đánh dấu màu vàng cho các trường hợp nhiều đáp án
+    # Part 1: Nhiều hơn 1 đáp án trong cùng câu
+    for _, duplicate_answers in multiple_part1.items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(debug_image, (x, y), 12, (0, 255, 255), 3)  # Yellow
+                cv2.putText(debug_image, "MULTI", (x-15, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                marked_circles.add(circle_label)
+
+    # Part 2: Cả D và S trong cùng sub-question
+    for _, duplicate_answers in multiple_part2.items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(debug_image, (x, y), 12, (0, 255, 255), 3)  # Yellow
+                cv2.putText(debug_image, "D&S", (x-10, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                marked_circles.add(circle_label)
+
+    # Part 3: Ô thừa và nhiều ký tự cùng vị trí
+    for circle_label in multiple_part3.get("extra_answers", []):
+        x, y = extract_coordinates_from_label(circle_label)
+        if x > 0 and y > 0:
+            cv2.circle(debug_image, (x, y), 12, (0, 255, 255), 3)  # Yellow
+            cv2.putText(debug_image, "EXTRA", (x-15, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+            marked_circles.add(circle_label)
+
+    for _, duplicate_answers in multiple_part3.get("multiple_at_position", {}).items():
+        for circle_label in duplicate_answers:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(debug_image, (x, y), 12, (0, 255, 255), 3)  # Yellow
+                cv2.putText(debug_image, "DUP", (x-10, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                marked_circles.add(circle_label)
+
+    # 2. Đánh dấu màu đỏ cho đáp án đúng bị thiếu
+    for _, missing_circles in missing_answers.items():
+        for circle_label in missing_circles:
+            if circle_label not in marked_circles:
+                x, y = extract_coordinates_from_label(circle_label)
+                if x > 0 and y > 0:
+                    cv2.circle(debug_image, (x, y), 12, (0, 0, 255), 3)  # Red
+                    cv2.putText(debug_image, "MISS", (x-15, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+                    marked_circles.add(circle_label)
+
+    # 3. Đánh dấu màu xanh cho đáp án đúng học sinh đã chọn
+    for circle_label in student_answers:
+        if circle_label not in marked_circles:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(debug_image, (x, y), 10, (0, 255, 0), 2)  # Green
+                marked_circles.add(circle_label)
+
+    # 4. Đánh dấu các ô còn lại (màu xám nhạt)
+    for circle_label in all_circles:
+        if circle_label not in marked_circles:
+            x, y = extract_coordinates_from_label(circle_label)
+            if x > 0 and y > 0:
+                cv2.circle(debug_image, (x, y), 6, (150, 150, 150), 1)  # Light gray
+
+    # Thêm legend chi tiết
+    legend_x, legend_y = 10, 30
+    cv2.putText(debug_image, "Detailed Debug Legend", (legend_x, legend_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+    legend_items = [
+        ((0, 255, 255), "Multiple answers (Yellow)"),
+        ((0, 0, 255), "Missing correct answers (Red)"),
+        ((0, 255, 0), "Correct student answers (Green)"),
+        ((150, 150, 150), "Other circles (Gray)")
+    ]
+
+    for i, (color, text) in enumerate(legend_items):
+        y_pos = legend_y + 25 + (i * 20)
+        cv2.circle(debug_image, (legend_x + 10, y_pos), 8, color, -1 if color != (150, 150, 150) else 1)
+        cv2.putText(debug_image, text, (legend_x + 30, y_pos + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    return debug_image
 
 
 def parse_student_id_from_answers(student_answers: List[str]) -> str:
@@ -886,10 +1077,11 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
     if image is None:
         raise ValueError(f"Không thể đọc ảnh: {image_path}")
 
-    # Phát hiện tất cả circles
-    detection_results, _ = detect_circles(image_path, debug=False)
+    # Phát hiện tất cả circles với debug enabled
+    detection_results, _ = detect_circles(image_path, debug=True)
     all_circles = detection_results.get("all_answers", [])
     student_answers = detection_results.get("student_answers", [])  # Đáp án học sinh đã tô
+    circle_debug_images = detection_results.get("debug_images", {})
 
     # Parse student ID và exam code từ student answers
     student_id = parse_student_id_from_answers(student_answers)
@@ -991,8 +1183,17 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
                     cv2.circle(marked_image, (x, y), 10, color, 2)
                     marked_circles.add(circle_label)
 
-    # Chuyển ảnh thành base64
+    # Tạo các ảnh debug
+    student_debug_image = create_student_answers_debug_image(image, student_answers, all_circles)
+    detailed_debug_image = create_detailed_debug_image(
+        image, student_answers, all_circles,
+        multiple_part1, multiple_part2, multiple_part3, missing_answers
+    )
+
+    # Chuyển các ảnh thành base64
     base64_image = image_to_base64(marked_image)
+    student_debug_base64 = image_to_base64(student_debug_image)
+    detailed_debug_base64 = image_to_base64(detailed_debug_image)
 
     # Chuyển đổi sang format mới
     new_format_data = convert_to_new_format(
@@ -1020,6 +1221,16 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
     # Thêm thông tin về grading session
     new_format_data["grading_session_id"] = matched_exam.get("grading_session_id", None)
     new_format_data["matched_exam_code"] = matched_exam.get("code", "")
+
+    # Thêm các ảnh debug
+    new_format_data["debug_images"] = {
+        "student_answers_debug": student_debug_base64,
+        "detailed_debug": detailed_debug_base64,
+        "original_with_marking": base64_image,
+        "roi_debug": circle_debug_images.get("roi_debug", ""),
+        "circles_detection_debug": circle_debug_images.get("circles_detection_debug", ""),
+        "circles_original_debug": circle_debug_images.get("original_debug", "")
+    }
 
     return base64_image, new_format_data
 
