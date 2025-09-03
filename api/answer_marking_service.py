@@ -186,7 +186,82 @@ def parse_part3_answer(question_num: str, answer_str: str) -> List[str]:
     return patterns
 
 
-def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, image_path: str) -> Dict[str, Any]:
+def check_answer_correctness_part1(question_num: int, student_answer: str, correct_answers) -> bool:
+    """
+    Kiểm tra tính đúng sai của đáp án Part 1
+
+    Args:
+        question_num: Số câu hỏi
+        student_answer: Đáp án học sinh (A, B, C, D)
+        correct_answers: Đáp án đúng
+
+    Returns:
+        bool: True nếu đúng, False nếu sai
+    """
+    if not correct_answers:
+        return False
+
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        for section in correct_answers:
+            if section.get("sectionType") == "MULTIPLE_CHOICE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    if question.get("questionNumber") == question_num:
+                        correct_answer = question.get("answer", "").upper()
+                        return student_answer.upper() == correct_answer
+    else:
+        # Format cũ
+        part1_answers = correct_answers.get("part1", {})
+        correct_answer = part1_answers.get(str(question_num), "").upper()
+        return student_answer.upper() == correct_answer
+
+    return False
+
+
+def check_answer_correctness_part2(question_num: int, sub_part: str, student_answer: str, correct_answers) -> bool:
+    """
+    Kiểm tra tính đúng sai của đáp án Part 2
+
+    Args:
+        question_num: Số câu hỏi
+        sub_part: Phần con (a, b, c, d)
+        student_answer: Đáp án học sinh (D, S)
+        correct_answers: Đáp án đúng
+
+    Returns:
+        bool: True nếu đúng, False nếu sai
+    """
+    if not correct_answers:
+        return False
+
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        for section in correct_answers:
+            if section.get("sectionType") == "TRUE_FALSE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    if question.get("questionNumber") == question_num:
+                        answer_dict = question.get("answer", {})
+                        correct_answer = answer_dict.get(sub_part, "")
+                        # Chuẩn hóa: "Đ" -> "D", "S" giữ nguyên
+                        normalized_correct = "D" if correct_answer == "Đ" else "S" if correct_answer == "S" else correct_answer
+                        normalized_student = "D" if student_answer == "D" else "S" if student_answer == "S" else student_answer
+                        return normalized_student == normalized_correct
+    else:
+        # Format cũ
+        part2_answers = correct_answers.get("part2", {})
+        key = f"{question_num}{sub_part}"
+        correct_answer = part2_answers.get(key, "")
+        # Chuẩn hóa: "Đ" -> "D", "S" giữ nguyên
+        normalized_correct = "D" if correct_answer == "Đ" else "S" if correct_answer == "S" else correct_answer
+        normalized_student = "D" if student_answer == "D" else "S" if student_answer == "S" else student_answer
+        return normalized_student == normalized_correct
+
+    return False
+
+
+def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, image_path: str, correct_answers=None) -> Dict[str, Any]:
     """
     Chuyển đổi format đáp án từ format cũ sang format mới theo yêu cầu
 
@@ -194,7 +269,8 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
         student_answers: Dict đáp án theo format cũ
         student_id: Mã học sinh
         exam_code: Mã đề thi
-        base64_image: Ảnh base64
+        image_path: Đường dẫn ảnh
+        correct_answers: Đáp án đúng để so sánh (optional)
 
     Returns:
         Dict theo format mới
@@ -209,10 +285,17 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
                 # Extract only numeric part from question_num
                 numeric_part = ''.join(filter(str.isdigit, str(question_num)))
                 if numeric_part:
-                    questions_part1.append({
+                    question_data = {
                         "questionNumber": int(numeric_part),
                         "answer": answer.upper()
-                    })
+                    }
+
+                    # Thêm field isCorrect nếu có correct_answers
+                    if correct_answers:
+                        is_correct = check_answer_correctness_part1(int(numeric_part), answer.upper(), correct_answers)
+                        question_data["isCorrect"] = is_correct
+
+                    questions_part1.append(question_data)
             except (ValueError, TypeError) as e:
                 print(f"Warning: Skipping invalid question_num '{question_num}' in part1: {e}")
                 continue
@@ -240,7 +323,16 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
                     # Format: {"a": "D", "b": "S", "c": "D", "d": "S"}
                     converted_answers = {}
                     for sub_part, answer in sub_answers.items():
-                        converted_answers[sub_part] = "D" if answer.upper() == "D" else "S"
+                        sub_answer_data = {
+                            "answer": "D" if answer.upper() == "D" else "S"
+                        }
+
+                        # Thêm field isCorrect nếu có correct_answers
+                        if correct_answers:
+                            is_correct = check_answer_correctness_part2(int(numeric_part), sub_part, answer.upper(), correct_answers)
+                            sub_answer_data["isCorrect"] = is_correct
+
+                        converted_answers[sub_part] = sub_answer_data
 
                     questions_part2.append({
                         "questionNumber": int(numeric_part),
@@ -256,7 +348,16 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
                     for i, answer in enumerate(answers_list):
                         if i < len(sub_parts):
                             sub_part = sub_parts[i]
-                            converted_answers[sub_part] = "D" if answer.strip().upper() == "D" else "S"
+                            sub_answer_data = {
+                                "answer": "D" if answer.strip().upper() == "D" else "S"
+                            }
+
+                            # Thêm field isCorrect nếu có correct_answers
+                            if correct_answers:
+                                is_correct = check_answer_correctness_part2(int(numeric_part), sub_part, answer.strip().upper(), correct_answers)
+                                sub_answer_data["isCorrect"] = is_correct
+
+                            converted_answers[sub_part] = sub_answer_data
 
                     questions_part2.append({
                         "questionNumber": int(numeric_part),
@@ -1264,7 +1365,8 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
         student_answers_formatted,
         student_id,
         exam_code,
-        marked_image_path  # Trả về đường dẫn thay vì base64
+        marked_image_path,  # Trả về đường dẫn thay vì base64
+        correct_answers     # Truyền đáp án đúng để so sánh
     )
 
     # Tạo báo cáo chi tiết về các vấn đề
