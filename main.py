@@ -303,27 +303,65 @@ async def mark_correct_answers_endpoint(
         with open(file_path, "wb") as buffer:
             buffer.write(await file.read())
 
+        # Luôn tạo debug image trước để có thể debug khi có lỗi
+        print("🔍 Creating debug image for circle detection...")
+        try:
+            detection_results, debug_image_path = detect_circles(file_path, debug=True)
+            all_circles = detection_results.get("all_answers", [])
+            student_answers_raw = detection_results.get("student_answers", [])
+            student_id = detection_results.get("student_id", "")
+            exam_code = detection_results.get("exam_code", "")
+
+            print(f"📊 Detection results: {len(all_circles)} circles, student_id: {student_id}, exam_code: {exam_code}")
+            if debug_image_path:
+                print(f"💾 Debug image saved: {debug_image_path}")
+        except Exception as detection_error:
+            print(f"❌ Error in circle detection: {detection_error}")
+            # Set default values
+            all_circles = []
+            student_answers_raw = []
+            student_id = ""
+            exam_code = ""
+            debug_image_path = None
+
         # Đánh dấu đáp án đúng lên ảnh và lấy đáp án học sinh
-        base64_image, student_data = mark_correct_answers_on_image(
-            file_path, 
-            final_answers, 
-            output_dir="result"
+        marked_image_path, student_data = mark_correct_answers_on_image(
+            file_path,
+            final_answers,
+            output_dir="output"
         )
-        
-        # Tạo summary thông tin
-        detection_results, _ = detect_circles(file_path, debug=False)
-        all_circles = detection_results.get("all_answers", [])
-        student_answers_raw = detection_results.get("student_answers", [])
-        summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
 
-        # student_data đã được chuyển đổi sang format mới trong answer_marking_service
-        response_data = student_data
+        # Kiểm tra xem có error trong student_data không
+        if "error" in student_data:
+            # Có lỗi (như không tìm thấy mã đề), thêm debug image path vào response
+            print(f"⚠️ Error in marking process: {student_data['error']}")
 
-        # Thêm summary và message
-        response_data["summary"] = summary
-        response_data["message"] = "Đánh dấu đáp án đúng thành công"
+            # Tạo summary cơ bản
+            summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
 
-        return JSONResponse(content=response_data)
+            # Thêm debug image path và summary vào error response
+            student_data["summary"] = summary
+            student_data["debug_image_path"] = debug_image_path
+            student_data["message"] = "Có lỗi trong quá trình đánh dấu nhưng đã tạo debug image"
+
+            return JSONResponse(content=student_data)
+        else:
+            # Thành công
+            # Tạo summary thông tin
+            summary = create_answer_summary(final_answers, all_circles, student_answers_raw)
+
+            # student_data đã được chuyển đổi sang format mới trong answer_marking_service
+            response_data = student_data
+
+            # Thêm summary và message
+            response_data["summary"] = summary
+            response_data["message"] = "Đánh dấu đáp án đúng thành công"
+
+            # Thêm debug image path vào response
+            if debug_image_path:
+                response_data["debug_image_path"] = debug_image_path
+
+            return JSONResponse(content=response_data)
 
     except HTTPException as e:
         raise e

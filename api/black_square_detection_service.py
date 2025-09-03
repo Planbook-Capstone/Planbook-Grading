@@ -8,40 +8,81 @@ from typing import List, Dict, Tuple, Any, Optional
 import imutils
 
 
-def find_optimal_threshold_for_squares(gray_image: np.ndarray) -> Tuple[int, np.ndarray]:
+def find_optimal_threshold_for_squares(gray_image: np.ndarray, debug_dir: str = "output") -> Tuple[int, np.ndarray]:
     """
     Tìm threshold tối ưu để detect ô vuông đen bằng cách thử nhiều giá trị threshold
+    Yêu cầu phải detect được đúng 31 ô vuông, nếu không sẽ trả về lỗi
 
     Args:
         gray_image: Ảnh grayscale
+        debug_dir: Thư mục lưu ảnh debug khi có lỗi
 
     Returns:
         Tuple (best_threshold, best_thresh_image)
+
+    Raises:
+        ValueError: Nếu không tìm thấy threshold nào detect được đúng 31 ô vuông
     """
     print("🔍 Tìm threshold tối ưu cho detection ô vuông đen...")
+    print("📋 Yêu cầu: Phải detect được đúng 31 ô vuông")
 
     best_threshold = -1
     best_count = 0
     best_thresh_image = None
+    best_contours = None
     results = []
+    target_squares = 31
 
-    for threshold_val in range(20, 201, 10):
+    # Sử dụng bước nhảy 5 thay vì 10
+    for threshold_val in range(20, 201, 5):
         _, thresh = cv2.threshold(gray_image, threshold_val, 255, cv2.THRESH_BINARY_INV)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         valid_squares = count_valid_black_squares(contours)
         results.append({'thresh': threshold_val, 'squares': valid_squares})
 
-        if valid_squares > best_count:
+        # Ưu tiên threshold detect được đúng 31 ô vuông
+        if valid_squares == target_squares:
             best_count = valid_squares
             best_threshold = threshold_val
             best_thresh_image = thresh.copy()
+            best_contours = contours
+            print(f"🎯 Tìm thấy threshold hoàn hảo: {threshold_val}, squares={valid_squares}")
+            break
+        elif valid_squares > best_count:
+            best_count = valid_squares
+            best_threshold = threshold_val
+            best_thresh_image = thresh.copy()
+            best_contours = contours
             print(f"🎯 Threshold mới tốt nhất: {threshold_val}, squares={valid_squares}")
 
     print("\n📊 Kết quả tìm threshold:")
     for res in results:
-        status = "🎯 BEST" if res['thresh'] == best_threshold else "✅" if res['squares'] > 0 else "❌"
+        if res['squares'] == target_squares:
+            status = "🎯 PERFECT"
+        elif res['thresh'] == best_threshold:
+            status = "🎯 BEST"
+        elif res['squares'] > 0:
+            status = "✅"
+        else:
+            status = "❌"
         print(f"   Threshold {res['thresh']}: {res['squares']} squares {status}")
+
+    # Kiểm tra xem có detect được đúng 31 ô vuông không
+    if best_count != target_squares:
+        error_msg = f"❌ KHÔNG DETECT ĐƯỢC ĐÚNG {target_squares} Ô VUÔNG! Chỉ tìm thấy {best_count} ô vuông với threshold tốt nhất {best_threshold}"
+        print(f"\n{error_msg}")
+
+        # Tạo debug image để hiển thị các ô vuông đã detect được
+        debug_image_path = create_debug_image_for_failed_detection(
+            gray_image, best_thresh_image, best_contours, best_threshold, best_count, target_squares, debug_dir
+        )
+
+        # Thêm thông tin debug image vào error message
+        enhanced_error_msg = f"{error_msg}\n🖼️ Debug image saved: {debug_image_path}"
+        print(f"🖼️ Debug image saved: {debug_image_path}")
+
+        raise ValueError(enhanced_error_msg)
 
     if best_threshold == -1:
         # Fallback: sử dụng threshold 128 nếu không tìm thấy gì
@@ -52,54 +93,246 @@ def find_optimal_threshold_for_squares(gray_image: np.ndarray) -> Tuple[int, np.
     print(f"🎯 Threshold tối ưu: {best_threshold} với {best_count} ô vuông")
     return best_threshold, best_thresh_image
 
-
-def count_valid_black_squares(contours) -> int:
+def detect_and_count_squares(contours) -> tuple[int, list]:
     """
-    Đếm số lượng ô vuông đen hợp lệ từ danh sách contours
-
-    Args:
-        contours: Danh sách contours từ cv2.findContours
-
-    Returns:
-        int: Số lượng ô vuông đen hợp lệ
+    Vừa đếm vừa detect tất cả ô vuông đen hợp lệ từ danh sách contours
+    (Cách A: quét epsilon thích ứng + convex hull trước khi approx)
     """
-    valid_squares = 0
+    detected_squares = []
+    square_id = 1
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
         # Điều chỉnh ngưỡng area để cân bằng giữa ô lớn và ô nhỏ
-        if area < 20 or area > 3000:  # Từ 20 pixels (4x5) đến 3000 pixels
+        if area < 10 or area > 3000:  # Từ 10 pixels đến 3000 pixels
             continue
 
-        # Sử dụng epsilon nhỏ để chính xác hơn
-        epsilon = 0.02 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        # --- CÁCH A: epsilon thích ứng + convex hull ---
+        peri = cv2.arcLength(cnt, True)
+        if peri <= 0:
+            continue
 
-        # Chấp nhận cả contour không hoàn hảo để detect ô vuông nhỏ
-        if len(approx) >= 3:  # Chấp nhận từ 3 cạnh trở lên
-            _, _, w, h = cv2.boundingRect(approx)
-            aspect_ratio = float(w) / h
+        hull = cv2.convexHull(cnt)
 
-            # Tính các metrics
-            bbox_area = w * h
+        # Quét epsilon từ nhỏ -> vừa, ưu tiên nghiệm 4 đỉnh & lồi
+        eps_list = [0.005, 0.0075, 0.01, 0.0125, 0.015, 0.02]
+        best4 = None
+        fallback = None  # lưu ứng viên 4–6 đỉnh nếu chưa ra đúng 4
+
+        for k in eps_list:
+            eps = k * peri
+            cand = cv2.approxPolyDP(hull, eps, True)
+
+            # Lưu fallback "gần đúng" (4-6 đỉnh), ưu tiên ít đỉnh hơn
+            if 4 <= len(cand) <= 6 and (fallback is None or len(cand) < len(fallback)):
+                fallback = cand
+
+            # Nghiệm lý tưởng: đúng 4 đỉnh và convex
+            if len(cand) == 4 and cv2.isContourConvex(cand):
+                best4 = cand
+                break
+
+        # Chọn approx cuối cùng
+        approx = best4 if best4 is not None else (
+            fallback if fallback is not None else cv2.approxPolyDP(hull, 0.01 * peri, True)
+        )
+
+        # Chỉ tiếp tục nếu có polygon 4 đỉnh (ổn định cho kiểm tra "ô vuông")
+        if len(approx) != 4:
+            continue
+
+        # --- TÍNH METRICS (đồng bộ, dùng approx để bounding) ---
+        x, y, w, h = cv2.boundingRect(approx)
+        aspect_ratio = float(w) / h if h > 0 else 0
+
+        bbox_area = w * h
+        contour_area = area  # đã tính ở trên
+        fill_ratio = contour_area / bbox_area if bbox_area > 0 else 0
+
+        perimeter = peri  # dùng lại chu vi đã tính
+        compactness = (4 * np.pi * contour_area / (perimeter * perimeter)) if perimeter > 0 else 0
+
+        hull_area = cv2.contourArea(hull)
+        solidity = (contour_area / hull_area) if hull_area > 0 else 0
+
+        # Điều kiện để detect ô vuông đen (tránh hình tròn)
+        if (0.7 <= aspect_ratio <= 1.3 and
+                fill_ratio >= 0.6 and
+                0.1 <= compactness <= 0.85 and
+                solidity >= 0.6):                    # Solidity cao
+
+            # Tính tọa độ tâm
+            M = cv2.moments(cnt)
+            if M['m00'] != 0:
+                center_x = int(M['m10'] / M['m00'])
+                center_y = int(M['m01'] / M['m00'])
+
+                square_info = {
+                    "id": square_id,
+                    "center": (center_x, center_y),
+                    "bounding_box": (x, y, w, h),
+                    "area": contour_area,
+                    "found": True,
+                    "aspect_ratio": aspect_ratio,
+                    "fill_ratio": fill_ratio,
+                    "compactness": compactness,
+                    "solidity": solidity
+                }
+
+                detected_squares.append(square_info)
+                square_id += 1
+
+    return len(detected_squares), detected_squares
+
+
+
+def count_valid_black_squares(contours) -> int:
+    """
+    Wrapper function để tương thích với code cũ
+    Chỉ trả về số lượng ô vuông
+    """
+    count, _ = detect_and_count_squares(contours)
+    return count
+
+
+def create_debug_image_for_failed_detection(
+    gray_image: np.ndarray,
+    thresh_image: np.ndarray,
+    contours,
+    threshold: int,
+    found_count: int,
+    target_count: int,
+    debug_dir: str = "output"
+) -> str:
+    """
+    Tạo ảnh debug khi không detect được đủ 31 ô vuông để troubleshoot
+
+    Args:
+        gray_image: Ảnh grayscale gốc
+        thresh_image: Ảnh binary sau threshold
+        contours: Danh sách contours đã tìm được
+        threshold: Threshold value được sử dụng
+        found_count: Số ô vuông đã tìm được
+        target_count: Số ô vuông mục tiêu (31)
+        debug_dir: Thư mục lưu ảnh debug
+
+    Returns:
+        str: Đường dẫn đến file ảnh debug
+    """
+    import time
+
+    # Tạo thư mục debug nếu chưa có
+    os.makedirs(debug_dir, exist_ok=True)
+
+    # Tạo ảnh màu từ grayscale để vẽ contours
+    debug_image = cv2.cvtColor(gray_image, cv2.COLOR_GRAY2BGR)
+
+    # Đếm và vẽ các ô vuông hợp lệ
+    valid_square_count = 0
+    all_contour_count = 0
+
+    for cnt in contours:
+        all_contour_count += 1
+        area = cv2.contourArea(cnt)
+
+        # Kiểm tra area threshold (ĐỒNG BỘ với detect_and_count_squares)
+        if area < 10 or area > 3000:  # ĐỒNG BỘ
+            # Vẽ contour không hợp lệ (do area) bằng màu xám
+            cv2.drawContours(debug_image, [cnt], -1, (128, 128, 128), 2)
+            continue
+
+        # --- CÁCH A: epsilon thích ứng + convex hull trước khi approx ---
+
+        # Tính chu vi & convex hull
+        peri = cv2.arcLength(cnt, True)
+        hull = cv2.convexHull(cnt)
+
+        # Quét epsilon từ nhỏ -> lớn, ưu tiên polygon lồi có đúng 4 đỉnh
+        eps_list = [0.005, 0.0075, 0.01, 0.0125, 0.015, 0.02]
+        best4 = None
+        fallback = None  # giữ ứng viên "gần đúng" (4-6 đỉnh) nếu chưa được 4
+
+        for k in eps_list:
+            eps = k * peri
+            cand = cv2.approxPolyDP(hull, eps, True)
+
+            # Lưu fallback tốt nhất: trong khoảng 4-6 đỉnh và ít đỉnh hơn là tốt hơn
+            if (4 == len(cand)) and (fallback is None or len(cand) < len(fallback)):
+                fallback = cand
+
+            # Ưu tiên nghiệm đúng 4 đỉnh & lồi
+            if len(cand) == 4 and cv2.isContourConvex(cand):
+                best4 = cand
+                break
+
+        # Chọn approx cuối cùng
+        approx = best4 if best4 is not None else (fallback if fallback is not None else cv2.approxPolyDP(hull, 0.01 * peri, True))
+
+        # Nếu vẫn chưa đủ 4 đỉnh thì bỏ qua shape này
+        if len(approx) == 4:
+            # --- PHẦN TÍNH METRIC (ĐỒNG BỘ với detect_and_count_squares) ---
+            # Lưu ý: boundingRect nên tính theo approx để nhất quán
+            x, y, w, h = cv2.boundingRect(approx)
+            aspect_ratio = float(w) / h if h > 0 else 0
+
             contour_area = cv2.contourArea(cnt)
-            fill_ratio = contour_area / bbox_area if bbox_area > 0 else 0
+            bounding_area = w * h
+            fill_ratio = contour_area / bounding_area if bounding_area > 0 else 0
 
-            perimeter = cv2.arcLength(cnt, True)
-            compactness = 4 * np.pi * contour_area / (perimeter * perimeter) if perimeter > 0 else 0
+            perimeter = peri
+            compactness = 4 * np.pi * contour_area / (perimeter * perimeter) if perimeter > 0 else 0  # ĐỒNG BỘ
 
-            hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             solidity = contour_area / hull_area if hull_area > 0 else 0
 
-            # Điều kiện để detect ô vuông đen, tránh hình tròn
-            if (0.85 <= aspect_ratio <= 1.15 and  # Aspect ratio chặt cho hình vuông
-                fill_ratio >= 0.8 and             # Fill ratio cao
-                0.6 <= compactness <= 0.85 and    # Compactness của hình vuông (tránh hình tròn ~1.0)
-                solidity >= 0.85):                # Solidity cao
-                valid_squares += 1
+            # --- CÙNG ĐIỀU KIỆN với detect_and_count_squares ---
+            if (0.7 <= aspect_ratio <= 1.3 and
+                fill_ratio >= 0.6 and
+                0.1 <= compactness <= 0.85 and
+                solidity >= 0.6): 
 
-    return valid_squares
+                # Ô vuông hợp lệ - vẽ màu xanh lá & đếm
+                valid_square_count += 1
+        # cv2.drawContours(img, [approx], -1, (0,255,0), 2)  # nếu muốn vẽ
+                cv2.drawContours(debug_image, [cnt], -1, (0, 255, 0), 2)
+
+                # Thêm số thứ tự
+                M = cv2.moments(cnt)
+                if M['m00'] != 0:
+                    center_x = int(M['m10'] / M['m00'])
+                    center_y = int(M['m01'] / M['m00'])
+                    cv2.putText(debug_image, str(valid_square_count), (center_x-10, center_y+5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            else:
+                # Ô vuông không hợp lệ (do điều kiện hình dạng) - vẽ màu đỏ
+                cv2.drawContours(debug_image, [cnt], -1, (0, 0, 255), 2)
+        else:
+            # Không đủ 4 điểm - vẽ màu cam
+            cv2.drawContours(debug_image, [cnt], -1, (0, 165, 255), 2)
+
+    # Thêm thông tin text lên ảnh
+    info_text = [
+        f"Threshold: {threshold}",
+        f"Found: {found_count}/{target_count} squares",
+        f"Total contours: {all_contour_count}",
+        f"Valid squares: {valid_square_count}",
+        f"Missing: {target_count - found_count} squares"
+    ]
+
+    y_offset = 30
+    for i, text in enumerate(info_text):
+        color = (0, 0, 255) if "Missing" in text else (255, 255, 255)
+        cv2.putText(debug_image, text, (10, y_offset + i * 25),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    # Lưu ảnh debug
+    timestamp = int(time.time())
+    debug_filename = f"debug_failed_detection_{threshold}_{found_count}of{target_count}_{timestamp}.png"
+    debug_path = os.path.join(debug_dir, debug_filename)
+
+    cv2.imwrite(debug_path, debug_image)
+
+    return debug_path
 
 
 # Các function cũ đã được thay thế bằng detect_all_black_squares_direct
@@ -575,13 +808,14 @@ def image_to_base64(image_array: np.ndarray) -> str:
 
 
 
-def detect_all_black_squares_direct(image: np.ndarray, debug: bool = False) -> List[Dict[str, Any]]:
+def detect_all_black_squares_direct(image: np.ndarray, debug: bool = False, debug_dir: str = "output") -> List[Dict[str, Any]]:
     """
     Detect tất cả ô vuông đen trực tiếp từ ảnh sử dụng phương pháp tương tự omr_service
 
     Args:
         image: Ảnh đầu vào (BGR format)
         debug: Có in debug info không
+        debug_dir: Thư mục lưu ảnh debug khi có lỗi
 
     Returns:
         List các ô vuông đen được detect
@@ -589,70 +823,20 @@ def detect_all_black_squares_direct(image: np.ndarray, debug: bool = False) -> L
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Tìm threshold tối ưu
-    optimal_thresh, binary = find_optimal_threshold_for_squares(gray)
+    optimal_thresh, binary = find_optimal_threshold_for_squares(gray, debug_dir)
 
     # Tìm các contour
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    detected_squares = []
-    square_id = 1
+    # SỬ DỤNG HÀM GỘP - KHÔNG CÒN LỌC 2 LẦN!
+    count, detected_squares = detect_and_count_squares(contours)
 
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        # Điều chỉnh ngưỡng area để cân bằng giữa ô lớn và ô nhỏ
-        if area < 15 or area > 3000:  # Từ 20 pixels (4x5) đến 3000 pixels
-            continue
-
-        # Kiểm tra các điều kiện hình vuông - nới lỏng hơn để detect ô vuông nhỏ
-        epsilon = 0.02 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-        # Chấp nhận cả contour không hoàn hảo để detect ô vuông nhỏ
-        if len(approx) >= 3:  # Chấp nhận từ 3 cạnh trở lên
-            x, y, w, h = cv2.boundingRect(approx)
-            aspect_ratio = float(w) / h
-            bbox_area = w * h
-            contour_area = cv2.contourArea(cnt)
-            fill_ratio = contour_area / bbox_area if bbox_area > 0 else 0
-
-            perimeter = cv2.arcLength(cnt, True)
-            compactness = 4 * np.pi * contour_area / (perimeter * perimeter) if perimeter > 0 else 0
-
-            hull = cv2.convexHull(cnt)
-            hull_area = cv2.contourArea(hull)
-            solidity = contour_area / hull_area if hull_area > 0 else 0
-
-            # Điều kiện để detect ô vuông đen, tránh hình tròn
-            if (0.75 <= aspect_ratio <= 1.3 and  # Aspect ratio chặt cho hình vuông
-                fill_ratio >= 0.75 and             # Fill ratio cao
-                0.3 <= compactness <= 0.85 and    # Compactness của hình vuông (tránh hình tròn ~1.0)
-                solidity >= 0.8):                # Solidity cao
-
-                # Tính tọa độ tâm
-                M = cv2.moments(cnt)
-                if M['m00'] != 0:
-                    center_x = int(M['m10'] / M['m00'])
-                    center_y = int(M['m01'] / M['m00'])
-
-                    square_info = {
-                        "id": square_id,
-                        "center": (center_x, center_y),
-                        "bounding_box": (x, y, w, h),
-                        "area": contour_area,
-                        "found": True,
-                        "aspect_ratio": aspect_ratio,
-                        "fill_ratio": fill_ratio,
-                        "compactness": compactness,
-                        "solidity": solidity
-                    }
-
-                    detected_squares.append(square_info)
-                    square_id += 1
-
-                    if debug:
-                        print(f"Square {square_id-1}: center=({center_x},{center_y}), area={contour_area:.1f}, "
-                              f"aspect={aspect_ratio:.2f}, fill={fill_ratio:.2f}, "
-                              f"compact={compactness:.2f}, solid={solidity:.2f}")
+    if debug:
+        print(f"Detected {count} squares using unified logic")
+        for square in detected_squares:
+            print(f"Square {square['id']}: center={square['center']}, area={square['area']:.1f}, "
+                  f"aspect={square['aspect_ratio']:.2f}, fill={square['fill_ratio']:.2f}, "
+                  f"compact={square['compactness']:.2f}, solid={square['solidity']:.2f}")
 
     # Sắp xếp theo tổng tọa độ x + y (từ góc trên-trái đến góc dưới-phải theo đường chéo)
     detected_squares.sort(key=lambda s: (s["center"][0] + s["center"][1]))
@@ -679,7 +863,7 @@ def detect_all_black_squares(image_path: str, debug: bool = False, output_dir: s
         - debug_image_path: Đường dẫn đến ảnh debug (nếu debug=True)
 
     Raises:
-        ValueError: Nếu không thể đọc ảnh
+        ValueError: Nếu không thể đọc ảnh hoặc không detect được đúng 31 ô vuông
     """
     # Đọc ảnh
     image = cv2.imread(image_path)
@@ -694,7 +878,7 @@ def detect_all_black_squares(image_path: str, debug: bool = False, output_dir: s
     print("Sử dụng ảnh gốc không resize")
 
     # Detect tất cả ô vuông đen trực tiếp
-    detected_squares = detect_all_black_squares_direct(image, debug=debug)
+    detected_squares = detect_all_black_squares_direct(image, debug=debug, debug_dir=output_dir)
 
     found_count = len(detected_squares)
     print(f"Tìm thấy {found_count} ô vuông đen")

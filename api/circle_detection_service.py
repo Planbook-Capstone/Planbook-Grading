@@ -2,14 +2,21 @@ import cv2
 import numpy as np
 import os
 import base64
+from .black_square_detection_service import (
+    detect_all_black_squares_direct,
+    calculate_student_id_roi,
+    calculate_exam_code_roi,
+    calculate_part1_roi,
+    calculate_part2_roi,
+    calculate_part3_roi
+)
 
 
 def _process_part3_circles(all_circles, filled_circles, part_number, debug_image):
     """
     Process Part 3 circles with the special grid structure:
     - 6 columns (questions/input fields)
-    - Multiple rows: minus sign, comma positions, digits 0-9
-    - 4 positions per row (a,b,c,d)
+    - 12 clusters per column: 1 minus, 2 comma positions, 10 digit rows (0-9) with 4 positions each
     """
     output_data = []
     student_answers = []
@@ -42,50 +49,93 @@ def _process_part3_circles(all_circles, filled_circles, part_number, debug_image
 
         question_number = col_idx + 1
 
-        # Sort by y coordinate to get rows
-        sorted_circles = sorted(column_circles, key=lambda c: c[1])
+        # First, sort all circles by y coordinate to identify rows
+        sorted_by_y = sorted(column_circles, key=lambda c: c[1])
 
-        # Group into rows based on y coordinate proximity
+        # Group circles into rows based on y coordinate proximity
         rows = []
         current_row = []
 
-        for circle in sorted_circles:
+        for circle in sorted_by_y:
             if not current_row:
                 current_row = [circle]
-            elif abs(circle[1] - current_row[0][1]) < 15:  # Same row threshold
+            elif abs(circle[1] - current_row[0][1]) <= 15:  # Same row threshold
                 current_row.append(circle)
             else:
                 if current_row:
-                    rows.append(sorted(current_row, key=lambda c: c[0]))  # Sort by x within row
+                    # Sort circles within row by x coordinate
+                    current_row.sort(key=lambda c: c[0])
+                    rows.append(current_row)
                 current_row = [circle]
 
         if current_row:
-            rows.append(sorted(current_row, key=lambda c: c[0]))
+            current_row.sort(key=lambda c: c[0])
+            rows.append(current_row)
 
-        # Process each row
+        # Now we have rows sorted by y, and within each row, circles sorted by x
+        # We expect 12 rows: 1 minus, 1 comma (with 2 circles), 10 digit rows (each with 4 circles)
+
+        # Process the rows
         for row_idx, row_circles in enumerate(rows):
-            for pos_idx, (x, y, r) in enumerate(row_circles):
-                # Determine the symbol/digit label based on y coordinate and position
-                symbol_label = _get_part3_symbol_label(pos_idx, y)
+            if row_idx == 0:
+                # First row: minus (should have 1 circle)
+                for pos_idx, (x, y, r) in enumerate(row_circles):
+                    symbol_label = f"{question_number}_minus_1"
+                    label = f"part{part_number}_{symbol_label}_{x}_{y}"
+                    output_data.append(label)
 
-                # Generate label in the new format: part3_question_symbol_x_y
-                label = f"part{part_number}_{question_number}_{symbol_label}_{x}_{y}"
-                output_data.append(label)
+                    is_filled = (x, y) in filled_circles_set
+                    if is_filled:
+                        student_answers.append(label)
 
-                is_filled = (x, y) in filled_circles_set
-                if is_filled:
-                    student_answers.append(label)
+                    if debug_image is not None:
+                        color = (0, 0, 255) if is_filled else (0, 255, 0)
+                        cv2.circle(debug_image, (x, y), r, color, 2)
+                        cv2.putText(debug_image, f"({symbol_label})", (x - 30, y - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                        cv2.putText(debug_image, symbol_label, (x - 15, y + 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
 
-                # Generate marking text for debug display
-                marking_text = f"({question_number}_{symbol_label})"
+            elif row_idx == 1:
+                # Second row: comma (should have 2 circles)
+                for pos_idx, (x, y, r) in enumerate(row_circles):
+                    comma_position = pos_idx + 2  # comma_2, comma_3
+                    symbol_label = f"{question_number}_comma_{comma_position}"
+                    label = f"part{part_number}_{symbol_label}_{x}_{y}"
+                    output_data.append(label)
 
-                if debug_image is not None:
-                    color = (0, 0, 255) if is_filled else (0, 255, 0)
-                    cv2.circle(debug_image, (x, y), r, color, 2)
-                    cv2.putText(debug_image, marking_text, (x - 30, y - 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
-                    cv2.putText(debug_image, f"{question_number}_{symbol_label}", (x - 15, y + 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                    is_filled = (x, y) in filled_circles_set
+                    if is_filled:
+                        student_answers.append(label)
+
+                    if debug_image is not None:
+                        color = (0, 0, 255) if is_filled else (0, 255, 0)
+                        cv2.circle(debug_image, (x, y), r, color, 2)
+                        cv2.putText(debug_image, f"({symbol_label})", (x - 30, y - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                        cv2.putText(debug_image, symbol_label, (x - 15, y + 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+
+            else:
+                # Rows 3-12: digits 0-9 (each should have 4 circles)
+                digit = row_idx - 2  # 0, 1, 2, ..., 9
+                for pos_idx, (x, y, r) in enumerate(row_circles):
+                    x_position = pos_idx + 1  # 1, 2, 3, 4
+                    symbol_label = f"{question_number}_{digit}_{x_position}"
+                    label = f"part{part_number}_{symbol_label}_{x}_{y}"
+                    output_data.append(label)
+
+                    is_filled = (x, y) in filled_circles_set
+                    if is_filled:
+                        student_answers.append(label)
+
+                    if debug_image is not None:
+                        color = (0, 0, 255) if is_filled else (0, 255, 0)
+                        cv2.circle(debug_image, (x, y), r, color, 2)
+                        cv2.putText(debug_image, f"({symbol_label})", (x - 30, y - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+                        cv2.putText(debug_image, symbol_label, (x - 15, y + 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
 
     return output_data, student_answers
 
@@ -127,30 +177,33 @@ def _process_id_student_circles(all_circles, filled_circles, debug_image):
         columns[col_idx].append((x, y, r))
 
     student_id_digits = [""] * 6  # Initialize with empty strings for 6 positions
-    
+
+    # Collect all y coordinates for clustering
+    all_y_coords = [y for x, y, r in all_circles]
+
     # Process each column (position)
     for col_idx, column_circles in enumerate(columns):
         if not column_circles:
             continue
-            
+
         position = col_idx + 1  # Position 1-6
-        
+
         # Sort by y coordinate to get rows (digits 0-9)
         sorted_circles = sorted(column_circles, key=lambda c: c[1])
-        
+
         for x, y, r in sorted_circles:
-            # Determine which digit (0-9) based on y coordinate
-            digit = _get_digit_from_y_coordinate_id(y)
-            
+            # Determine which digit (0-9) based on y coordinate using clustering
+            digit = _get_digit_from_y_coordinate_id(y, all_y_coords)
+
             # Generate label for this circle: digit_position
             label = f"id_student_{digit}_{position}_{x}_{y}"
             output_data.append(label)
-            
+
             is_filled = (x, y) in filled_circles_set
             if is_filled:
                 student_answers.append(label)
                 student_id_digits[col_idx] = str(digit)  # Store the filled digit
-            
+
             if debug_image is not None:
                 color = (0, 0, 255) if is_filled else (0, 255, 0)
                 cv2.circle(debug_image, (x, y), r, color, 2)
@@ -163,74 +216,79 @@ def _process_id_student_circles(all_circles, filled_circles, debug_image):
     return output_data, student_answers, student_id
 
 
-def _get_digit_from_y_coordinate_id(y_coord):
+def _get_digit_from_y_coordinate_id(y_coord, all_y_coords=None):
     """
     Determine which digit (0-9) based on y coordinate for student ID
-    Assumes digits are arranged vertically in order 0,1,2,3,4,5,6,7,8,9
+    Uses clustering approach to group circles with similar y coordinates (±10 tolerance)
+    and assigns digits 0-9 based on sorted cluster positions
     """
-    # Dựa trên dữ liệu thực tế: y từ 260 đến 576 (với ROI mới bắt đầu từ y=230)
-    # Digit 0 ở y ≈ 260, digit 9 ở y ≈ 576
-    base_y = 240  # y coordinate của digit 0
-    max_y = 560   # y coordinate của digit 9
-    
-    # Tính spacing cho 10 digits (0-9)
-    digit_spacing = (max_y - base_y) / 9  # Chia khoảng cách cho 9 khoảng (0->1, 1->2, ..., 8->9)
-    
-    # Tính digit dựa trên vị trí y
-    digit = round((y_coord - base_y) / digit_spacing)
-    return max(0, min(9, digit))  # Ensure digit is between 0-9
+    if all_y_coords is None:
+        # Fallback to old logic if no clustering data provided
+        base_y = 260  # y coordinate của digit 0
+        max_y = 560   # y coordinate của digit 9
+        digit_spacing = (max_y - base_y) / 9
+        digit = round((y_coord - base_y) / digit_spacing)
+        return max(0, min(9, digit))
+
+    # Clustering logic: group y coordinates with ±10 tolerance
+    clusters = []
+    tolerance = 10
+
+    # Get unique y coordinates and sort them
+    unique_y_coords = sorted(set(all_y_coords))
+
+    # Group coordinates into clusters using tolerance
+    for y in unique_y_coords:
+        # Find if this y belongs to an existing cluster
+        added_to_cluster = False
+        for cluster in clusters:
+            # Check if y is within tolerance of any point in the cluster
+            if any(abs(y - cluster_y) <= tolerance for cluster_y in cluster):
+                cluster.append(y)
+                added_to_cluster = True
+                break
+
+        # If not added to any cluster, create new cluster
+        if not added_to_cluster:
+            clusters.append([y])
+
+    # Calculate average y for each cluster and sort clusters by y
+    cluster_data = []
+    for cluster in clusters:
+        avg_y = sum(cluster) / len(cluster)
+        cluster_data.append((avg_y, cluster))
+
+    # Sort clusters by average y coordinate (ascending)
+    cluster_data.sort(key=lambda x: x[0])
+
+    # Ensure we have exactly 10 clusters for digits 0-9
+    if len(cluster_data) > 10:
+        # If more than 10 clusters, keep only the first 10
+        cluster_data = cluster_data[:10]
+    elif len(cluster_data) < 10:
+        # If less than 10 clusters, use interpolation for missing digits
+        print(f"⚠️ Only found {len(cluster_data)} clusters, expected 10 for digits 0-9")
+
+    # Find which cluster the current y_coord belongs to
+    for digit, (avg_y, cluster) in enumerate(cluster_data):
+        if any(abs(y_coord - cluster_y) <= tolerance for cluster_y in cluster):
+            return min(digit, 9)  # Ensure digit is between 0-9
+
+    # Fallback: if not found in any cluster, find closest cluster
+    if cluster_data:
+        closest_digit = 0
+        min_distance = float('inf')
+        for digit, (avg_y, cluster) in enumerate(cluster_data):
+            distance = abs(y_coord - avg_y)
+            if distance < min_distance:
+                min_distance = distance
+                closest_digit = digit
+        return min(closest_digit, 9)
+
+    return 0  # Default fallback
 
 
-def _get_digit_from_y_coordinate(y_coord):
-    """
-    Determine which digit (0-9) based on y coordinate
-    Assumes digits are arranged vertically in order 0,1,2,3,4,5,6,7,8,9
-    """
-    # These values may need adjustment based on actual image layout
-    base_y = 100  # Approximate y coordinate of digit 0
-    digit_spacing = 24  # Approximate spacing between digits
-    
-    digit = int((y_coord - base_y) / digit_spacing)
-    return max(0, min(9, digit))  # Ensure digit is between 0-9
 
-
-def _get_part3_symbol_label(pos_idx, y_coord):
-    """
-    Generate the symbol/digit label for Part 3 based on position and y coordinate
-    Returns labels like: minus, comma_1, comma_2, 0_1, 0_2, 1_1, etc.
-    """
-    # Determine symbol/digit based on y coordinate
-    if y_coord < 1280:  # Minus row
-        if pos_idx == 0:  # Only first position has minus
-            return f"minus_{pos_idx+1}"
-
-    elif y_coord < 1310:  # Comma row
-        if pos_idx in [0, 1]:  # Middle positions have comma
-            return f"comma_{pos_idx+2}"
-        
-    else:  # Digit rows (0-9)
-        # Calculate which digit based on y coordinate
-        digit = max(0, min(9, (y_coord - 1315) // 24))
-        position = pos_idx + 1  # Convert to 1-4
-        return f"{digit}_{position}"
-    """
-    Generate the symbol/digit label for Part 3 based on position and y coordinate
-    Returns labels like: minus, comma_1, comma_2, 0_1, 0_2, 1_1, etc.
-    """
-    # Determine symbol/digit based on y coordinate
-    if y_coord < 1280:  # Minus row
-        if pos_idx == 0:  # Only first position has minus
-            return f"minus_{pos_idx+1}"
-
-    elif y_coord < 1310:  # Comma row
-        if pos_idx in [0, 1]:  # Middle positions have comma
-            return f"comma_{pos_idx+2}"
-        
-    else:  # Digit rows (0-9)
-        # Calculate which digit based on y coordinate
-        digit = max(0, min(9, (y_coord - 1315) // 24))
-        position = pos_idx + 1  # Convert to 1-4
-        return f"{digit}_{position}"
 
 def _process_part1_circles(all_circles, filled_circles, part_number, starting_question_number, debug_image):
     output_data = []
@@ -287,7 +345,7 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
     if sorted_by_y:
         current_row = [sorted_by_y[0]]
         for i in range(1, len(sorted_by_y)):
-            if abs(sorted_by_y[i][1] - current_row[-1][1]) < 20: # y-threshold
+            if abs(sorted_by_y[i][1] - current_row[-1][1]) < 15: # y-threshold reduced from 20 to 15
                 current_row.append(sorted_by_y[i])
             else:
                 rows.append(sorted(current_row, key=lambda c: c[0]))
@@ -331,7 +389,27 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
     return output_data, student_answers
 
-def _detect_circles_in_roi(image, roi_coords):
+def _detect_circles_in_roi(image, roi_coords, part_name=None, debug=False):
+    """
+    Detect circles in ROI with automatic param2 adjustment based on part type
+
+    Args:
+        image: Input image
+        roi_coords: ROI coordinates (x_start, y_start, x_end, y_end)
+        part_name: Part identifier to determine expected circle count
+                  - 'student_id': 60 circles
+                  - 'exam_code': 30 circles
+                  - 'part1': 160 circles
+                  - 'part2': 64 circles
+                  - 'part3': 258 circles
+        debug: Whether to save debug images
+
+    Returns:
+        tuple: (all_circles, filled_circles)
+
+    Raises:
+        ValueError: If circle count doesn't match expected count for the part
+    """
     x_start, y_start, x_end, y_end = roi_coords
 
     # Validate ROI coordinates
@@ -358,37 +436,177 @@ def _detect_circles_in_roi(image, roi_coords):
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blurred_roi = cv2.medianBlur(gray_roi, 5)
 
-    circles = cv2.HoughCircles(
-        blurred_roi, cv2.HOUGH_GRADIENT, dp=1, minDist=18,
-        param1=80, param2=20, minRadius=5, maxRadius=20
-    )
+    # Define expected circle counts for each part
+    expected_counts = {
+        'student_id': 60,
+        'exam_code': 30,
+        'part1': 160,
+        'part2': 64,
+        'part3': 258
+    }
 
-    if circles is None:
-        return [], []
+    expected_count = expected_counts.get(part_name, None)
 
-    circles = np.round(circles[0, :]).astype("int")
+    # Try different param2 values from 18 to 26 to find the right circle count
+    best_circles = None
+    best_filled_circles = None
 
-    all_circles = []
-    filled_circles = []
+    for param2_value in range(18, 27):
+        circles = cv2.HoughCircles(
+            blurred_roi, cv2.HOUGH_GRADIENT, dp=1, minDist=11,
+            param1=90, param2=param2_value, minRadius=5, maxRadius=20
+        )
 
-    for (x, y, r) in circles:
-        # Create a mask for the circle
-        mask = np.zeros(gray_roi.shape, dtype=np.uint8)
-        cv2.circle(mask, (x, y), r, 255, -1)
+        if circles is None:
+            continue
 
-        # Get the pixels within the circle from the original grayscale ROI
-        circle_pixels = gray_roi[mask == 255]
+        circles = np.round(circles[0, :]).astype("int")
 
-        # Check if the circle is filled based on average pixel intensity
-        if circle_pixels.size > 0:
-            average_intensity = np.mean(circle_pixels)
-            print(f"Circle at ({x + x_start}, {y + y_start}), r={r}, avg_intensity={average_intensity:.2f}")
-            if average_intensity < 180:
-                filled_circles.append((x + x_start, y + y_start, r))
+        # Process circles to validate shape and detect filled ones
+        all_circles = []
+        filled_circles = []
 
-        all_circles.append((x + x_start, y + y_start, r))
+        for (x, y, r) in circles:
+            # Shape validation: Kiểm tra xem có phải thực sự là hình tròn không
+            # Tạo contour từ circle để tính các metric
+            mask = np.zeros(gray_roi.shape, dtype=np.uint8)
+            cv2.circle(mask, (x, y), r, 255, -1)
 
-    return all_circles, filled_circles
+            # Tìm contour của circle
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                continue
+
+            contour = contours[0]
+            area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+
+            # Tính circularity = 4π * area / perimeter²
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+            else:
+                circularity = 0
+
+            # Tính aspect ratio của bounding rectangle
+            _, _, w_rect, h_rect = cv2.boundingRect(contour)
+            aspect_ratio = float(w_rect) / h_rect if h_rect > 0 else 0
+
+            # Shape validation: Loại bỏ những shape không đủ tròn
+            if circularity < 0.5 or aspect_ratio < 0.5 or aspect_ratio > 1.5:
+                continue
+
+            # Get the pixels within the circle from the original grayscale ROI
+            circle_pixels = gray_roi[mask == 255]
+
+            # Check if the circle is filled based on average pixel intensity
+            if circle_pixels.size > 0:
+                average_intensity = np.mean(circle_pixels)
+                if average_intensity < 180:
+                    filled_circles.append((x + x_start, y + y_start, r))
+
+            all_circles.append((x + x_start, y + y_start, r))
+
+        # Check if we found the expected number of circles
+        if expected_count is not None and len(all_circles) == expected_count:
+            print(f"✅ Found exact match for {part_name}: {len(all_circles)} circles with param2={param2_value}")
+            best_circles = all_circles
+            best_filled_circles = filled_circles
+            break
+        elif expected_count is None:
+            # If no expected count specified, use the first successful detection
+            best_circles = all_circles
+            best_filled_circles = filled_circles
+            break
+        else:
+            print(f"🔍 param2={param2_value}: found {len(all_circles)} circles (expected {expected_count})")
+
+    # If we couldn't find the exact expected count, create debug image and raise error
+    if expected_count is not None and (best_circles is None or len(best_circles) != expected_count):
+        actual_count = len(best_circles) if best_circles else 0
+
+        # Create debug image for error case
+        if debug and part_name:
+            debug_roi = roi.copy()
+
+            # Draw all circles found (even if count is wrong)
+            if best_circles:
+                for (x, y, r) in best_circles:
+                    # Convert back to ROI coordinates
+                    roi_x = x - x_start
+                    roi_y = y - y_start
+
+                    # Check if filled
+                    is_filled = best_filled_circles and any(abs(x - fx) < 2 and abs(y - fy) < 2 for fx, fy, _ in best_filled_circles)
+
+                    # Draw circle
+                    color = (0, 0, 255) if is_filled else (0, 255, 0)  # Red for filled, green for empty
+                    cv2.circle(debug_roi, (roi_x, roi_y), r, color, 2)
+
+                    # Add circle number
+                    cv2.putText(debug_roi, str(len([c for c in best_circles if c[0] <= x and c[1] <= y])),
+                               (roi_x - 10, roi_y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+
+            # Add error title in red
+            cv2.putText(debug_roi, f"ERROR: {part_name}: {actual_count}/{expected_count} circles",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            filled_count = len(best_filled_circles) if best_filled_circles else 0
+            cv2.putText(debug_roi, f"Found {filled_count} filled circles",
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            # Save debug image for error case
+            debug_filename = f"debug_{part_name}_circles_ERROR.jpg"
+            cv2.imwrite(debug_filename, debug_roi)
+            print(f"💾 Error debug image saved: {debug_filename}")
+
+        error_msg = f"Vui lòng chụp lại ảnh rõ nét, không chụp nghiêng hoặc ánh sáng không phù hợp. " \
+                   f"Phần {part_name}: phát hiện {actual_count} ô, cần {expected_count} ô."
+        print(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+
+    # Log final results and create debug image
+    if best_circles:
+        filled_count = len(best_filled_circles)
+        total_count = len(best_circles)
+        print(f"✅ Final result for {part_name}: {total_count} total circles, {filled_count} filled circles")
+
+        # Create debug image if requested
+        if debug and part_name:
+            debug_roi = roi.copy()
+
+            # Draw all circles
+            for (x, y, r) in best_circles:
+                # Convert back to ROI coordinates
+                roi_x = x - x_start
+                roi_y = y - y_start
+
+                # Check if filled
+                is_filled = any(abs(x - fx) < 2 and abs(y - fy) < 2 for fx, fy, _ in best_filled_circles)
+
+                # Draw circle
+                color = (0, 0, 255) if is_filled else (0, 255, 0)  # Red for filled, green for empty
+                cv2.circle(debug_roi, (roi_x, roi_y), r, color, 2)
+
+                # Add circle number
+                cv2.putText(debug_roi, str(len([c for c in best_circles if c[0] <= x and c[1] <= y])),
+                           (roi_x - 10, roi_y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+
+            # Add title
+            cv2.putText(debug_roi, f"{part_name}: {total_count} circles ({filled_count} filled)",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            # Save debug image
+            debug_filename = f"debug_{part_name}_circles.jpg"
+            cv2.imwrite(debug_filename, debug_roi)
+            print(f"💾 Debug image saved: {debug_filename}")
+
+        # Log some circle details for debugging
+        for i, (x, y, r) in enumerate(best_circles[:5]):  # Show first 5 circles
+            is_filled = (x, y, r) in best_filled_circles or any(
+                abs(x - fx) < 2 and abs(y - fy) < 2 for fx, fy, _ in best_filled_circles
+            )
+            print(f"  Circle {i+1}: ({x}, {y}), r={r}, filled={is_filled}")
+
+    return best_circles or [], best_filled_circles or []
 
 def _process_exam_code_circles(all_circles, filled_circles, debug_image):
     """
@@ -419,42 +637,52 @@ def _process_exam_code_circles(all_circles, filled_circles, debug_image):
     
     # Tính toán chính xác để chia thành 3 cột
     total_width = max_x - min_x
-    column_width = total_width / 3 if len(sorted_by_x) > 1 else 30
-    
-    for x, y, r in all_circles:
-        # Determine which column (position 1-3) this circle belongs to
-        col_idx = int((x - min_x) / column_width)
-        # Đảm bảo cột cuối cùng không bị vượt quá index 2
-        if col_idx >= 3:
-            col_idx = 2
-        col_idx = max(0, col_idx)  # Ensure within bounds (0-2 for 3 columns)
-        columns[col_idx].append((x, y, r))
+
+    # Xử lý trường hợp đặc biệt khi tất cả circles có cùng tọa độ x
+    if total_width == 0 or len(sorted_by_x) <= 1:
+        # Nếu chỉ có 1 circle hoặc tất cả có cùng x, đặt vào cột đầu tiên
+        for x, y, r in all_circles:
+            columns[0].append((x, y, r))
+    else:
+        column_width = total_width / 3
+
+        for x, y, r in all_circles:
+            # Determine which column (position 1-3) this circle belongs to
+            col_idx = int((x - min_x) / column_width)
+            # Đảm bảo cột cuối cùng không bị vượt quá index 2
+            if col_idx >= 3:
+                col_idx = 2
+            col_idx = max(0, col_idx)  # Ensure within bounds (0-2 for 3 columns)
+            columns[col_idx].append((x, y, r))
 
     exam_code_digits = [""] * 3  # Initialize with empty strings for 3 positions
-    
+
+    # Collect all y coordinates for clustering
+    all_y_coords = [y for x, y, r in all_circles]
+
     # Process each column (position)
     for col_idx, column_circles in enumerate(columns):
         if not column_circles:
             continue
-            
+
         position = col_idx + 1  # Position 1-3
-        
+
         # Sort by y coordinate to get rows (digits 0-9)
         sorted_circles = sorted(column_circles, key=lambda c: c[1])
-        
+
         for x, y, r in sorted_circles:
-            # Determine which digit (0-9) based on y coordinate
-            digit = _get_digit_from_y_coordinate_id(y)
-            
+            # Determine which digit (0-9) based on y coordinate using clustering
+            digit = _get_digit_from_y_coordinate_id(y, all_y_coords)
+
             # Generate label for this circle: digit_position
             label = f"exam_code_{digit}_{position}_{x}_{y}"
             output_data.append(label)
-            
+
             is_filled = (x, y) in filled_circles_set
             if is_filled:
                 student_answers.append(label)
                 exam_code_digits[col_idx] = str(digit)  # Store the filled digit
-            
+
             if debug_image is not None:
                 color = (0, 0, 255) if is_filled else (0, 255, 0)
                 cv2.circle(debug_image, (x, y), r, color, 2)
@@ -476,39 +704,39 @@ def detect_circles(image_path, debug=False):
     img_height, img_width = image.shape[:2]
     print(f"🔍 Image dimensions: {img_width}x{img_height}")
 
-    # Define ROIs for reference dimensions (these coordinates are designed for a specific image size)
-    # Reference dimensions that the ROI coordinates were designed for
-    reference_width, reference_height = 1200, 1600  # Approximate reference dimensions
+    # Get ROIs from black square detection service
+    print("🔍 Detecting black squares to determine ROIs...")
+    detected_squares = detect_all_black_squares_direct(image)
 
-    # Original ROI coordinates (designed for reference dimensions)
-    roi_part_id_student_ref = (900, 230 , 1050, 570)  # ROI for student ID section
-    roi_part_exam_code_ref = (1050, 230, 1152, 570)     # ROI for exam code section (3 columns)
-    roi_part1_ref = (200, 680, 1200, 950)
-    roi_part2_ref = (200, 990, 1200, 1163)
-    roi_part3_ref = (200, 1220, 1110, 1558) # Adjusted coordinates for Part 3
+    # Get ROI coordinates from black square detection
+    student_id_roi = calculate_student_id_roi(detected_squares)
+    exam_code_roi = calculate_exam_code_roi(detected_squares)
+    part1_roi = calculate_part1_roi(detected_squares)
+    part2_roi = calculate_part2_roi(detected_squares)
+    part3_roi = calculate_part3_roi(detected_squares)
 
-    # Calculate scaling factors
-    scale_x = img_width / reference_width
-    scale_y = img_height / reference_height
-    print(f"🔧 Scaling factors: x={scale_x:.3f}, y={scale_y:.3f}")
+    print(f"📍 ROIs from black square detection:")
+    print(f"   Student ID: {student_id_roi}")
+    print(f"   Exam Code: {exam_code_roi}")
+    print(f"   Part 1: {part1_roi}")
+    print(f"   Part 2: {part2_roi}")
+    print(f"   Part 3: {part3_roi}")
 
-    # Scale ROI coordinates to match actual image dimensions
-    def scale_roi(roi_ref):
-        x1, y1, x2, y2 = roi_ref
-        return (
-            int(x1 * scale_x),
-            int(y1 * scale_y),
-            int(x2 * scale_x),
-            int(y2 * scale_y)
-        )
+    # Convert ROI format from (x, y, width, height) to (x1, y1, x2, y2)
+    def convert_roi_format(roi):
+        if roi == (0, 0, 0, 0):
+            return None
+        x, y, w, h = roi
+        return (x, y, x + w, y + h)
 
-    roi_part_id_student = scale_roi(roi_part_id_student_ref)
-    roi_part_exam_code = scale_roi(roi_part_exam_code_ref)
-    roi_part1 = scale_roi(roi_part1_ref)
-    roi_part2 = scale_roi(roi_part2_ref)
-    roi_part3 = scale_roi(roi_part3_ref)
+    # Convert ROI coordinates to (x1, y1, x2, y2) format
+    roi_part_id_student = convert_roi_format(student_id_roi)
+    roi_part_exam_code = convert_roi_format(exam_code_roi)
+    roi_part1 = convert_roi_format(part1_roi)
+    roi_part2 = convert_roi_format(part2_roi)
+    roi_part3 = convert_roi_format(part3_roi)
 
-    # Validate scaled ROI coordinates
+    # Validate ROI coordinates
     rois_to_check = [
         ("Student ID", roi_part_id_student),
         ("Exam Code", roi_part_exam_code),
@@ -517,11 +745,15 @@ def detect_circles(image_path, debug=False):
         ("Part 3", roi_part3)
     ]
 
-    for roi_name, (x1, y1, x2, y2) in rois_to_check:
-        if x2 > img_width or y2 > img_height or x1 < 0 or y1 < 0:
-            print(f"⚠️  {roi_name} ROI ({x1},{y1},{x2},{y2}) extends beyond image bounds ({img_width}x{img_height})")
+    for roi_name, roi in rois_to_check:
+        if roi is None:
+            print(f"⚠️  {roi_name} ROI could not be determined from black squares")
         else:
-            print(f"✅ {roi_name} ROI ({x1},{y1},{x2},{y2}) is within image bounds")
+            x1, y1, x2, y2 = roi
+            if x2 > img_width or y2 > img_height or x1 < 0 or y1 < 0:
+                print(f"⚠️  {roi_name} ROI ({x1},{y1},{x2},{y2}) extends beyond image bounds ({img_width}x{img_height})")
+            else:
+                print(f"✅ {roi_name} ROI ({x1},{y1},{x2},{y2}) is within image bounds")
 
     debug_image = image.copy() if debug else None
     all_answers = []
@@ -530,54 +762,69 @@ def detect_circles(image_path, debug=False):
     exam_code = ""
 
     # Process Student ID
-    if debug:
-        cv2.rectangle(debug_image, (roi_part_id_student[0], roi_part_id_student[1]), (roi_part_id_student[2], roi_part_id_student[3]), (255, 255, 0), 2)
-        cv2.putText(debug_image, "Student ID ROI", (roi_part_id_student[0], roi_part_id_student[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+    if roi_part_id_student is not None:
+        if debug:
+            cv2.rectangle(debug_image, (roi_part_id_student[0], roi_part_id_student[1]), (roi_part_id_student[2], roi_part_id_student[3]), (255, 255, 0), 2)
+            cv2.putText(debug_image, "Student ID ROI", (roi_part_id_student[0], roi_part_id_student[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-    id_all_circles, id_filled_circles = _detect_circles_in_roi(image, roi_part_id_student)
-    id_data, id_student_answers, student_id = _process_id_student_circles(id_all_circles, id_filled_circles, debug_image)
-    all_answers.extend(id_data)
-    student_answers.extend(id_student_answers)
+        id_all_circles, id_filled_circles = _detect_circles_in_roi(image, roi_part_id_student, 'student_id', debug)
+        id_data, id_student_answers, student_id = _process_id_student_circles(id_all_circles, id_filled_circles, debug_image)
+        all_answers.extend(id_data)
+        student_answers.extend(id_student_answers)
+    else:
+        print("⚠️ Skipping Student ID processing - ROI not available")
 
     # Process Exam Code
-    if debug:
-        cv2.rectangle(debug_image, (roi_part_exam_code[0], roi_part_exam_code[1]), (roi_part_exam_code[2], roi_part_exam_code[3]), (255, 0, 255), 2)
-        cv2.putText(debug_image, "Exam Code ROI", (roi_part_exam_code[0], roi_part_exam_code[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+    if roi_part_exam_code is not None:
+        if debug:
+            cv2.rectangle(debug_image, (roi_part_exam_code[0], roi_part_exam_code[1]), (roi_part_exam_code[2], roi_part_exam_code[3]), (255, 0, 255), 2)
+            cv2.putText(debug_image, "Exam Code ROI", (roi_part_exam_code[0], roi_part_exam_code[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
-    exam_all_circles, exam_filled_circles = _detect_circles_in_roi(image, roi_part_exam_code)
-    exam_data, exam_student_answers, exam_code = _process_exam_code_circles(exam_all_circles, exam_filled_circles, debug_image)
-    all_answers.extend(exam_data)
-    student_answers.extend(exam_student_answers)
+        exam_all_circles, exam_filled_circles = _detect_circles_in_roi(image, roi_part_exam_code, 'exam_code', debug)
+        exam_data, exam_student_answers, exam_code = _process_exam_code_circles(exam_all_circles, exam_filled_circles, debug_image)
+        all_answers.extend(exam_data)
+        student_answers.extend(exam_student_answers)
+    else:
+        print("⚠️ Skipping Exam Code processing - ROI not available")
 
     # Process Part 1
-    if debug:
-        cv2.rectangle(debug_image, (roi_part1[0], roi_part1[1]), (roi_part1[2], roi_part1[3]), (255, 0, 0), 2)
-        cv2.putText(debug_image, "Part 1 ROI", (roi_part1[0], roi_part1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    if roi_part1 is not None:
+        if debug:
+            cv2.rectangle(debug_image, (roi_part1[0], roi_part1[1]), (roi_part1[2], roi_part1[3]), (255, 0, 0), 2)
+            cv2.putText(debug_image, "Part 1 ROI", (roi_part1[0], roi_part1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
-    part1_all_circles, part1_filled_circles = _detect_circles_in_roi(image, roi_part1)
-    part1_data, part1_student, _ = _process_part1_circles(part1_all_circles, part1_filled_circles, 1, 1, debug_image)
-    all_answers.extend(part1_data)
-    student_answers.extend(part1_student)
+        part1_all_circles, part1_filled_circles = _detect_circles_in_roi(image, roi_part1, 'part1', debug)
+        part1_data, part1_student, _ = _process_part1_circles(part1_all_circles, part1_filled_circles, 1, 1, debug_image)
+        all_answers.extend(part1_data)
+        student_answers.extend(part1_student)
+    else:
+        print("⚠️ Skipping Part 1 processing - ROI not available")
 
     # Process Part 2
-    if debug:
-        cv2.rectangle(debug_image, (roi_part2[0], roi_part2[1]), (roi_part2[2], roi_part2[3]), (0, 0, 255), 2)
-        cv2.putText(debug_image, "Part 2 ROI", (roi_part2[0], roi_part2[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    if roi_part2 is not None:
+        if debug:
+            cv2.rectangle(debug_image, (roi_part2[0], roi_part2[1]), (roi_part2[2], roi_part2[3]), (0, 0, 255), 2)
+            cv2.putText(debug_image, "Part 2 ROI", (roi_part2[0], roi_part2[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-    part2_all_circles, part2_filled_circles = _detect_circles_in_roi(image, roi_part2)
-    part2_data, part2_student = _process_part2_circles(part2_all_circles, part2_filled_circles, 2, debug_image)
-    all_answers.extend(part2_data)
-    student_answers.extend(part2_student)
+        part2_all_circles, part2_filled_circles = _detect_circles_in_roi(image, roi_part2, 'part2', debug)
+        part2_data, part2_student = _process_part2_circles(part2_all_circles, part2_filled_circles, 2, debug_image)
+        all_answers.extend(part2_data)
+        student_answers.extend(part2_student)
+    else:
+        print("⚠️ Skipping Part 2 processing - ROI not available")
 
     # Process Part 3
-    if debug:
-        cv2.rectangle(debug_image, (roi_part3[0], roi_part3[1]), (roi_part3[2], roi_part3[3]), (0, 255, 255), 2)
-        cv2.putText(debug_image, "Part 3 ROI", (roi_part3[0], roi_part3[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    if roi_part3 is not None:
+        if debug:
+            cv2.rectangle(debug_image, (roi_part3[0], roi_part3[1]), (roi_part3[2], roi_part3[3]), (0, 255, 255), 2)
+            cv2.putText(debug_image, "Part 3 ROI", (roi_part3[0], roi_part3[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-    part3_all_circles, part3_filled_circles = _detect_circles_in_roi(image, roi_part3)
-    part3_data, part3_student = _process_part3_circles(part3_all_circles, part3_filled_circles, 3, debug_image)
-    all_answers.extend(part3_data)
-    student_answers.extend(part3_student)
+        part3_all_circles, part3_filled_circles = _detect_circles_in_roi(image, roi_part3, 'part3', debug)
+        part3_data, part3_student = _process_part3_circles(part3_all_circles, part3_filled_circles, 3, debug_image)
+        all_answers.extend(part3_data)
+        student_answers.extend(part3_student)
+    else:
+        print("⚠️ Skipping Part 3 processing - ROI not available")
 
     # Tạo các ảnh debug
     debug_images = {}
@@ -590,26 +837,14 @@ def detect_circles(image_path, debug=False):
         debug_image_path = os.path.join(output_dir, f"{base_name}_circles_debug.png")
         cv2.imwrite(debug_image_path, debug_image)
 
-        # Tạo ảnh debug ROI
-        roi_debug_image = create_roi_debug_image(image, image_path)
-        roi_debug_path = os.path.join(output_dir, f"{base_name}_roi_debug.png")
-        cv2.imwrite(roi_debug_path, roi_debug_image)
-
-        # Tạo ảnh debug circles detection
-        circles_debug_image = create_circles_detection_debug_image(image, image_path)
-        circles_debug_path = os.path.join(output_dir, f"{base_name}_circles_detection_debug.png")
-        cv2.imwrite(circles_debug_path, circles_debug_image)
-
+    
         # Chuyển thành base64 để trả về trong API
         debug_images = {
-            "roi_debug": image_to_base64(roi_debug_image),
-            "circles_detection_debug": image_to_base64(circles_debug_image),
             "original_debug": image_to_base64(debug_image)
         }
 
         print(f"Debug images saved:")
-        print(f"  - ROI debug: {roi_debug_path}")
-        print(f"  - Circles detection: {circles_debug_path}")
+
         print(f"  - Original debug: {debug_image_path}")
 
     # Format student answers into structured format
@@ -689,151 +924,6 @@ def _format_student_answers(student_answers):
             formatted["part3"][question_num] = answer_str
 
     return formatted
-
-
-def create_roi_debug_image(image: np.ndarray, image_path: str) -> np.ndarray:
-    """
-    Tạo ảnh debug hiển thị các ROI được định nghĩa
-
-    Args:
-        image: Ảnh gốc
-        image_path: Đường dẫn ảnh (để lấy tên file)
-
-    Returns:
-        NumPy array của ảnh debug ROI
-    """
-    debug_image = image.copy()
-
-    # Define ROIs (giống như trong detect_circles)
-    roi_part_id_student = (900, 230, 1050, 570)
-    roi_part_exam_code = (1050, 230, 1152, 570)
-    roi_part1 = (200, 680, 1200, 950)
-    roi_part2 = (200, 990, 1200, 1163)
-    roi_part3 = (200, 1220, 1110, 1558)
-
-    # Vẽ các ROI với màu sắc khác nhau
-    rois = [
-        (roi_part_id_student, (255, 255, 0), "Student ID"),
-        (roi_part_exam_code, (255, 0, 255), "Exam Code"),
-        (roi_part1, (255, 0, 0), "Part 1"),
-        (roi_part2, (0, 0, 255), "Part 2"),
-        (roi_part3, (0, 255, 255), "Part 3")
-    ]
-
-    for roi, color, label in rois:
-        x1, y1, x2, y2 = roi
-        # Vẽ khung ROI
-        cv2.rectangle(debug_image, (x1, y1), (x2, y2), color, 3)
-
-        # Vẽ label với background
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        thickness = 2
-        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
-
-        # Background cho text
-        cv2.rectangle(debug_image,
-                     (x1, y1 - text_size[1] - 10),
-                     (x1 + text_size[0] + 10, y1),
-                     color, -1)
-
-        # Text
-        cv2.putText(debug_image, label, (x1 + 5, y1 - 5),
-                   font, font_scale, (255, 255, 255), thickness)
-
-        # Thêm thông tin kích thước
-        size_text = f"{x2-x1}x{y2-y1}"
-        cv2.putText(debug_image, size_text, (x1 + 5, y1 + 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-    # Thêm title
-    cv2.putText(debug_image, "ROI Debug - All Regions", (10, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
-    cv2.putText(debug_image, "ROI Debug - All Regions", (10, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-
-    return debug_image
-
-
-def create_circles_detection_debug_image(image: np.ndarray, image_path: str) -> np.ndarray:
-    """
-    Tạo ảnh debug hiển thị tất cả các ô tròn được detect
-
-    Args:
-        image: Ảnh gốc
-        image_path: Đường dẫn ảnh
-
-    Returns:
-        NumPy array của ảnh debug circles detection
-    """
-    debug_image = image.copy()
-
-    # Define ROIs
-    roi_part_id_student = (900, 230, 1050, 570)
-    roi_part_exam_code = (1050, 230, 1152, 570)
-    roi_part1 = (200, 680, 1200, 950)
-    roi_part2 = (200, 990, 1200, 1163)
-    roi_part3 = (200, 1220, 1110, 1558)
-
-    total_circles = 0
-    total_filled = 0
-
-    # Process each ROI và vẽ circles
-    rois_info = [
-        (roi_part_id_student, (255, 255, 0), "ID"),
-        (roi_part_exam_code, (255, 0, 255), "EX"),
-        (roi_part1, (255, 0, 0), "P1"),
-        (roi_part2, (0, 0, 255), "P2"),
-        (roi_part3, (0, 255, 255), "P3")
-    ]
-
-    for roi, color, prefix in rois_info:
-        all_circles, filled_circles = _detect_circles_in_roi(image, roi)
-
-        # Vẽ tất cả circles (màu nhạt)
-        for x, y, r in all_circles:
-            cv2.circle(debug_image, (x, y), r, tuple(c//2 for c in color), 1)
-            total_circles += 1
-
-        # Vẽ filled circles (màu đậm)
-        for x, y, r in filled_circles:
-            cv2.circle(debug_image, (x, y), r, color, 2)
-            cv2.circle(debug_image, (x, y), 3, color, -1)  # Điểm tâm
-            total_filled += 1
-
-        # Vẽ khung ROI nhẹ
-        x1, y1, x2, y2 = roi
-        cv2.rectangle(debug_image, (x1, y1), (x2, y2), color, 1)
-
-        # Thông tin số lượng circles
-        info_text = f"{prefix}: {len(filled_circles)}/{len(all_circles)}"
-        cv2.putText(debug_image, info_text, (x1, y1 - 5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-    # Thêm legend và thống kê
-    legend_y = 50
-    cv2.putText(debug_image, "Circles Detection Debug", (10, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3)
-    cv2.putText(debug_image, "Circles Detection Debug", (10, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-
-    cv2.putText(debug_image, f"Total: {total_filled}/{total_circles} circles filled",
-               (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-    cv2.putText(debug_image, f"Total: {total_filled}/{total_circles} circles filled",
-               (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-
-    # Legend cho màu sắc
-    legend_items = [
-        ("Light circles: All detected", (150, 150, 150)),
-        ("Bold circles: Filled/Selected", (255, 255, 255))
-    ]
-
-    for i, (text, color) in enumerate(legend_items):
-        y_pos = legend_y + 25 + (i * 20)
-        cv2.putText(debug_image, text, (10, y_pos),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-    return debug_image
 
 
 def image_to_base64(image_array: np.ndarray) -> str:

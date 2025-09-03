@@ -3,6 +3,7 @@ import numpy as np
 import os
 import json
 import base64
+import time
 from typing import Dict, List, Any, Tuple, Union
 from api.circle_detection_service import detect_circles
 
@@ -185,7 +186,7 @@ def parse_part3_answer(question_num: str, answer_str: str) -> List[str]:
     return patterns
 
 
-def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, base64_image: str) -> Dict[str, Any]:
+def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, image_path: str) -> Dict[str, Any]:
     """
     Chuyển đổi format đáp án từ format cũ sang format mới theo yêu cầu
 
@@ -299,16 +300,10 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
         "questions": questions_part3
     })
 
-    # Check if base64_image already has the data URL prefix
-    if base64_image.startswith("data:image/"):
-        image_base64 = base64_image
-    else:
-        image_base64 = f"data:image/png;base64,{base64_image}"
-
     return {
         "student_code": student_id,
         "exam_code": exam_code,
-        "image_base64": image_base64,
+        "image_path": image_path,  # Trả về đường dẫn ảnh thay vì base64
         "student_answer_json": student_answer_json
     }
 
@@ -1057,9 +1052,9 @@ def check_missing_answers(student_answers: List[str], correct_answers, all_circl
     return missing_answers
 
 
-def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any]], output_dir: str = "result") -> Tuple[str, Dict[str, Any]]:
+def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any]], output_dir: str = "output") -> Tuple[str, Dict[str, Any]]:
     """
-    Đánh dấu đáp án đúng lên ảnh và trả về ảnh base64 + đáp án học sinh + student ID
+    Đánh dấu đáp án đúng lên ảnh và trả về đường dẫn ảnh + đáp án học sinh + student ID
 
     Args:
         image_path: Đường dẫn ảnh đầu vào
@@ -1067,7 +1062,7 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
         output_dir: Thư mục đầu ra
 
     Returns:
-        Tuple (base64_image, response_data)
+        Tuple (image_path, response_data)
 
     Raises:
         ValueError: Nếu không tìm thấy mã đề phù hợp
@@ -1077,11 +1072,10 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
     if image is None:
         raise ValueError(f"Không thể đọc ảnh: {image_path}")
 
-    # Phát hiện tất cả circles với debug enabled
-    detection_results, _ = detect_circles(image_path, debug=True)
+    # Phát hiện tất cả circles không cần debug images
+    detection_results, _ = detect_circles(image_path, debug=False)
     all_circles = detection_results.get("all_answers", [])
     student_answers = detection_results.get("student_answers", [])  # Đáp án học sinh đã tô
-    circle_debug_images = detection_results.get("debug_images", {})
 
     # Parse student ID và exam code từ student answers
     student_id = parse_student_id_from_answers(student_answers)
@@ -1183,24 +1177,24 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
                     cv2.circle(marked_image, (x, y), 10, color, 2)
                     marked_circles.add(circle_label)
 
-    # Tạo các ảnh debug
-    student_debug_image = create_student_answers_debug_image(image, student_answers, all_circles)
-    detailed_debug_image = create_detailed_debug_image(
-        image, student_answers, all_circles,
-        multiple_part1, multiple_part2, multiple_part3, missing_answers
-    )
+    # Tạo thư mục output nếu chưa tồn tại
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Chuyển các ảnh thành base64
-    base64_image = image_to_base64(marked_image)
-    student_debug_base64 = image_to_base64(student_debug_image)
-    detailed_debug_base64 = image_to_base64(detailed_debug_image)
+    # Lưu ảnh đánh dấu vào thư mục output
+    base_name = os.path.splitext(os.path.basename(image_path))[0]
+    timestamp = int(time.time())
+    marked_image_filename = f"{base_name}_marked_{timestamp}.png"
+    marked_image_path = os.path.join(output_dir, marked_image_filename)
 
-    # Chuyển đổi sang format mới
+    cv2.imwrite(marked_image_path, marked_image)
+    print(f"💾 Saved marked image to: {marked_image_path}")
+
+    # Chuyển đổi sang format mới với đường dẫn ảnh thay vì base64
     new_format_data = convert_to_new_format(
         student_answers_formatted,
         student_id,
         exam_code,
-        base64_image
+        marked_image_path  # Trả về đường dẫn thay vì base64
     )
 
     # Tạo báo cáo chi tiết về các vấn đề
@@ -1222,17 +1216,10 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
     new_format_data["grading_session_id"] = matched_exam.get("grading_session_id", None)
     new_format_data["matched_exam_code"] = matched_exam.get("code", "")
 
-    # Thêm các ảnh debug
-    new_format_data["debug_images"] = {
-        "student_answers_debug": student_debug_base64,
-        "detailed_debug": detailed_debug_base64,
-        "original_with_marking": base64_image,
-        "roi_debug": circle_debug_images.get("roi_debug", ""),
-        "circles_detection_debug": circle_debug_images.get("circles_detection_debug", ""),
-        "circles_original_debug": circle_debug_images.get("original_debug", "")
-    }
+    # Chỉ giữ lại ảnh đánh dấu chính (không có debug images)
+    # Ảnh đánh dấu đã được lưu vào thư mục output
 
-    return base64_image, new_format_data
+    return marked_image_path, new_format_data
 
 
 def create_marking_report(multiple_part1: Dict[str, List[str]],
