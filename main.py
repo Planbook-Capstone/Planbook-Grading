@@ -16,6 +16,7 @@ from api.omr_service import process_image as process_omr_image
 from api.circle_detection_service import detect_circles
 from api.answer_marking_service import mark_correct_answers_on_image, create_answer_summary
 from api.black_square_detection_service import detect_all_black_squares
+from api.supabase_storage_service import upload_image_to_supabase, upload_multiple_images_to_supabase
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -344,6 +345,29 @@ async def mark_correct_answers_endpoint(
             student_data["debug_image_path"] = debug_image_path
             student_data["message"] = "Có lỗi trong quá trình đánh dấu nhưng đã tạo debug image"
 
+            # Nếu có marked_image_path (ảnh đã được tạo dù có lỗi), thử upload lên Supabase
+            if marked_image_path and os.path.exists(marked_image_path):
+                try:
+                    print("📤 Uploading marked image to Supabase (with errors)...")
+                    upload_result = upload_image_to_supabase(marked_image_path, "marked_images_with_errors")
+
+                    if upload_result["success"]:
+                        print(f"✅ Successfully uploaded marked image with errors: {upload_result['file_url']}")
+                        student_data["supabase_url"] = upload_result["file_url"]
+                        student_data["supabase_path"] = upload_result["file_path"]
+                        student_data["supabase_file_name"] = upload_result["file_name"]
+                        student_data["upload_success"] = True
+                        student_data["message"] += " và đã upload lên Supabase"
+                    else:
+                        print(f"❌ Failed to upload marked image with errors: {upload_result.get('error', 'Unknown error')}")
+                        student_data["upload_success"] = False
+                        student_data["upload_error"] = upload_result.get("error", "Unknown error")
+
+                except Exception as upload_error:
+                    print(f"❌ Exception during Supabase upload (with errors): {upload_error}")
+                    student_data["upload_success"] = False
+                    student_data["upload_error"] = str(upload_error)
+
             return JSONResponse(content=student_data)
         else:
             # Thành công
@@ -360,6 +384,31 @@ async def mark_correct_answers_endpoint(
             # Thêm debug image path vào response
             if debug_image_path:
                 response_data["debug_image_path"] = debug_image_path
+
+            # Upload ảnh đã đánh dấu lên Supabase
+            if marked_image_path and os.path.exists(marked_image_path):
+                try:
+                    print("📤 Uploading marked image to Supabase...")
+                    upload_result = upload_image_to_supabase(marked_image_path, "marked_images")
+
+                    if upload_result["success"]:
+                        print(f"✅ Successfully uploaded marked image: {upload_result['file_url']}")
+                        response_data["supabase_url"] = upload_result["file_url"]
+                        response_data["supabase_path"] = upload_result["file_path"]
+                        response_data["supabase_file_name"] = upload_result["file_name"]
+                        response_data["upload_success"] = True
+                        response_data["message"] += " và đã upload lên Supabase"
+                    else:
+                        print(f"❌ Failed to upload marked image: {upload_result.get('error', 'Unknown error')}")
+                        response_data["upload_success"] = False
+                        response_data["upload_error"] = upload_result.get("error", "Unknown error")
+                        response_data["message"] += " nhưng upload lên Supabase thất bại"
+
+                except Exception as upload_error:
+                    print(f"❌ Exception during Supabase upload: {upload_error}")
+                    response_data["upload_success"] = False
+                    response_data["upload_error"] = str(upload_error)
+                    response_data["message"] += " nhưng có lỗi khi upload lên Supabase"
 
             return JSONResponse(content=response_data)
 
@@ -606,6 +655,248 @@ async def detect_black_squares_from_url_endpoint(
         )
     finally:
         # Clean up temporary files
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {temp_file_path}: {e}")
+
+
+@app.post("/upload-image-to-supabase/")
+async def upload_image_to_supabase_endpoint(
+    file: UploadFile = File(..., description="Image file to upload to Supabase"),
+    folder: str = Form("images", description="Folder in bucket to store the image")
+):
+    """
+    API endpoint để upload ảnh lên Supabase Storage
+
+    Args:
+        file: File ảnh cần upload
+        folder: Thư mục trong bucket để lưu ảnh (mặc định: "images")
+
+    Returns:
+        JSONResponse chứa thông tin về file đã upload
+    """
+    temp_file_path = None
+
+    try:
+        # Tạo tên file tạm thời
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        temp_file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Lưu file tạm thời
+        with open(temp_file_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+        logger.info(f"Uploading image to Supabase: {file.filename}")
+
+        # Upload lên Supabase
+        result = upload_image_to_supabase(temp_file_path, folder)
+
+        if result["success"]:
+            logger.info(f"Successfully uploaded to Supabase: {result['file_url']}")
+            return JSONResponse(content=result)
+        else:
+            logger.error(f"Failed to upload to Supabase: {result.get('error', 'Unknown error')}")
+            return JSONResponse(
+                status_code=400,
+                content=result
+            )
+
+    except Exception as e:
+        logger.error(f"Error uploading image {file.filename} to Supabase: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Lỗi server: {str(e)}",
+                "message": "Upload ảnh thất bại"
+            }
+        )
+    finally:
+        # Xóa file tạm thời
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {temp_file_path}: {e}")
+
+
+@app.post("/upload-multiple-images-to-supabase/")
+async def upload_multiple_images_to_supabase_endpoint(
+    files: list[UploadFile] = File(..., description="Multiple image files to upload to Supabase"),
+    folder: str = Form("images", description="Folder in bucket to store the images")
+):
+    """
+    API endpoint để upload nhiều ảnh lên Supabase Storage
+
+    Args:
+        files: List các file ảnh cần upload
+        folder: Thư mục trong bucket để lưu ảnh (mặc định: "images")
+
+    Returns:
+        JSONResponse chứa thông tin về các file đã upload
+    """
+    temp_file_paths = []
+
+    try:
+        # Lưu tất cả file tạm thời
+        for file in files:
+            file_extension = os.path.splitext(file.filename)[1]
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            temp_file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+            with open(temp_file_path, "wb") as buffer:
+                buffer.write(await file.read())
+
+            temp_file_paths.append(temp_file_path)
+
+        logger.info(f"Uploading {len(files)} images to Supabase")
+
+        # Upload tất cả lên Supabase
+        result = upload_multiple_images_to_supabase(temp_file_paths, folder)
+
+        logger.info(f"Upload completed: {result['success_count']}/{result['total_files']} successful")
+
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        logger.error(f"Error uploading multiple images to Supabase: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Lỗi server: {str(e)}",
+                "message": "Upload ảnh thất bại"
+            }
+        )
+    finally:
+        # Xóa tất cả file tạm thời
+        for temp_file_path in temp_file_paths:
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    logger.info(f"Cleaned up temporary file: {temp_file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary file {temp_file_path}: {e}")
+
+
+@app.post("/upload-image-url-to-supabase/")
+async def upload_image_url_to_supabase_endpoint(
+    request: ImageUrlRequest,
+    folder: str = Form("images", description="Folder in bucket to store the image")
+):
+    """
+    API endpoint để tải ảnh từ URL và upload lên Supabase Storage
+
+    Args:
+        request: ImageUrlRequest chứa image_url
+        folder: Thư mục trong bucket để lưu ảnh (mặc định: "images")
+
+    Returns:
+        JSONResponse chứa thông tin về file đã upload
+    """
+    temp_file_path = None
+
+    try:
+        # Validate URL
+        if not request.image_url or not request.image_url.strip():
+            raise HTTPException(status_code=400, detail="URL ảnh không được để trống")
+
+        # Parse URL để lấy extension
+        parsed_url = urlparse(request.image_url)
+        path = parsed_url.path
+
+        # Lấy extension từ URL, nếu không có thì mặc định là .jpg
+        file_extension = os.path.splitext(path)[1] if os.path.splitext(path)[1] else '.jpg'
+
+        # Tạo tên file tạm thời
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        temp_file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Tải ảnh từ URL
+        logger.info(f"Downloading image from URL for Supabase upload: {request.image_url}")
+
+        # Set headers để giả lập browser request
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        # Tải ảnh với timeout
+        response = requests.get(request.image_url, headers=headers, timeout=30, stream=True)
+        response.raise_for_status()
+
+        # Kiểm tra content type
+        content_type = response.headers.get('content-type', '').lower()
+        if not any(img_type in content_type for img_type in ['image/jpeg', 'image/jpg', 'image/png', 'image/bmp', 'image/tiff']):
+            raise HTTPException(status_code=400, detail="URL không trả về ảnh hợp lệ")
+
+        # Lưu ảnh vào file tạm thời
+        with open(temp_file_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        logger.info(f"Image downloaded successfully: {temp_file_path}")
+
+        # Kiểm tra kích thước file
+        file_size = os.path.getsize(temp_file_path)
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="File ảnh tải về có kích thước 0 bytes")
+
+        logger.info(f"Downloaded file size: {file_size} bytes")
+
+        # Upload lên Supabase
+        result = upload_image_to_supabase(temp_file_path, folder)
+
+        if result["success"]:
+            # Thêm thông tin URL gốc vào kết quả
+            result["source_url"] = request.image_url
+            result["processing_method"] = "url_download"
+
+            logger.info(f"Successfully uploaded URL image to Supabase: {result['file_url']}")
+            return JSONResponse(content=result)
+        else:
+            logger.error(f"Failed to upload URL image to Supabase: {result.get('error', 'Unknown error')}")
+            return JSONResponse(
+                status_code=400,
+                content=result
+            )
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error downloading image from URL {request.image_url}: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Không thể tải ảnh từ URL. Vui lòng kiểm tra lại đường dẫn!",
+                "message": f"Lỗi tải ảnh: {str(e)}"
+            }
+        )
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={
+                "success": False,
+                "error": e.detail,
+                "message": e.detail
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error uploading URL image to Supabase: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Lỗi server: {str(e)}",
+                "message": "Upload ảnh từ URL thất bại"
+            }
+        )
+    finally:
+        # Xóa file tạm thời
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.remove(temp_file_path)
