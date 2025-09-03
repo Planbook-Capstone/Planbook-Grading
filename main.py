@@ -362,10 +362,14 @@ async def mark_correct_answers_endpoint(
             exam_code = ""
             debug_image_path = None
 
+        # Lấy sectionConfigJson để tính điểm
+        section_config = session_data.get("sectionConfigJson", [])
+
         # Đánh dấu đáp án đúng lên ảnh và lấy đáp án học sinh
         marked_image_path, student_data = mark_correct_answers_on_image(
             file_path,
             exam_list,
+            section_config=section_config,
             output_dir="output"
         )
 

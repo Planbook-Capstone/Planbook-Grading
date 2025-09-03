@@ -1052,7 +1052,7 @@ def check_missing_answers(student_answers: List[str], correct_answers, all_circl
     return missing_answers
 
 
-def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any]], output_dir: str = "output") -> Tuple[str, Dict[str, Any]]:
+def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any]], section_config: List[Dict[str, Any]] = None, output_dir: str = "output") -> Tuple[str, Dict[str, Any]]:
     """
     Đánh dấu đáp án đúng lên ảnh và trả về đường dẫn ảnh + đáp án học sinh + student ID
 
@@ -1191,6 +1191,62 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
                     cv2.circle(marked_image, (x, y), 10, color, 2)
                     marked_circles.add(circle_label)
 
+    # Tạo summary trước để có correct_matches
+    summary_data = create_answer_summary(correct_answers, all_circles, student_answers)
+
+    # Tính điểm dựa trên section config
+    if section_config:
+        scores = calculate_scores(
+            summary_data.get("correct_matches", {"part1": [], "part2": [], "part3": []}),
+            summary_data.get("incorrect_missing", {"part1": [], "part2": [], "part3": []}),
+            multiple_part1,
+            multiple_part2,
+            multiple_part3,
+            student_answers_formatted,
+            correct_answers,
+            section_config
+        )
+
+        # Ghi thông tin điểm lên ảnh
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        color = (0, 0, 255)  # Màu đỏ
+        thickness = 2
+
+        # Vị trí ghi text (góc trên bên trái)
+        y_offset = 30
+        x_offset = 20
+
+        # Tổng điểm
+        total_text = f"Tong diem: {scores['total_score']:.2f}/{scores['max_score']}"
+        cv2.putText(marked_image, total_text, (x_offset, y_offset), font, font_scale, color, thickness)
+
+        # Số câu đúng từng phần
+        y_offset += 30
+        part1_text = f"Phan 1: {scores['part1']['correct_count']}/{scores['part1']['total_questions']} cau ({scores['part1']['score']:.2f}d)"
+        cv2.putText(marked_image, part1_text, (x_offset, y_offset), font, font_scale, color, thickness)
+
+        # Phần 2 chi tiết hơn
+        y_offset += 30
+        part2_basic = f"Phan 2: {scores['part2']['correct_count']}/{scores['part2']['total_questions']} cau hoan toan dung ({scores['part2']['score']:.2f}d)"
+        cv2.putText(marked_image, part2_basic, (x_offset, y_offset), font, font_scale, color, thickness)
+
+        # Hiển thị chi tiết từng câu phần 2 nếu có thông tin
+        if 'part2_details' in scores:
+            for i, detail in enumerate(scores['part2_details']):  # Hiển thị tất cả các câu
+                y_offset += 25
+                detail_text = f"  C{detail['question']}: {detail['correct_count']}/4 dung -> {detail['score']:.2f}d"
+                cv2.putText(marked_image, detail_text, (x_offset + 10, y_offset), font, 0.6, color, thickness)
+
+        y_offset += 30
+        part3_text = f"Phan 3: {scores['part3']['correct_count']}/{scores['part3']['total_questions']} cau ({scores['part3']['score']:.2f}d)"
+        cv2.putText(marked_image, part3_text, (x_offset, y_offset), font, font_scale, color, thickness)
+
+        print(f"📊 Calculated scores: {scores}")
+    else:
+        scores = None
+        print("⚠️ No section config provided, skipping score calculation")
+
     # Tạo thư mục output nếu chưa tồn tại
     os.makedirs(output_dir, exist_ok=True)
 
@@ -1229,6 +1285,10 @@ def mark_correct_answers_on_image(image_path: str, exam_list: List[Dict[str, Any
     # Thêm thông tin về grading session
     new_format_data["grading_session_id"] = matched_exam.get("grading_session_id", None)
     new_format_data["matched_exam_code"] = matched_exam.get("code", "")
+
+    # Thêm thông tin điểm số nếu có
+    if section_config and 'scores' in locals():
+        new_format_data["scores"] = scores
 
     # Chỉ giữ lại ảnh đánh dấu chính (không có debug images)
     # Ảnh đánh dấu đã được lưu vào thư mục output
@@ -1320,6 +1380,201 @@ def create_marking_report(multiple_part1: Dict[str, List[str]],
     )
 
     return report
+
+
+def calculate_scores(correct_matches: Dict[str, List[str]],
+                    incorrect_missing: Dict[str, List[str]],
+                    multiple_answers_part1: Dict[str, List[str]],
+                    multiple_answers_part2: Dict[str, List[str]],
+                    multiple_answers_part3: Dict[str, List[str]],
+                    student_answers_formatted: Dict[str, Dict[str, str]],
+                    correct_answers: List[Dict[str, Any]],
+                    section_config: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Tính điểm dựa trên section config và kết quả chấm
+
+    Args:
+        correct_matches: Các đáp án đúng (màu xanh)
+        incorrect_missing: Các đáp án sai/thiếu (màu đỏ)
+        multiple_answers_part1: Câu có nhiều đáp án part 1 (màu vàng)
+        multiple_answers_part2: Câu có nhiều đáp án part 2 (màu vàng)
+        multiple_answers_part3: Câu có nhiều đáp án part 3 (màu vàng)
+        student_answers_formatted: Đáp án học sinh đã format
+        correct_answers: Đáp án đúng
+        section_config: Cấu hình chấm điểm
+
+    Returns:
+        Dict chứa thông tin điểm số
+    """
+    if not section_config:
+        section_config = []
+
+    scores = {
+        "part1": {"correct_count": 0, "total_questions": 0, "score": 0.0, "points_per_question": 0.0},
+        "part2": {"correct_count": 0, "total_questions": 0, "score": 0.0, "rule": {}},
+        "part3": {"correct_count": 0, "total_questions": 0, "score": 0.0, "points_per_question": 0.0},
+        "total_score": 0.0,
+        "max_score": 10.0
+    }
+
+    # Lấy config cho từng section
+    section_configs = {}
+    for config in section_config:
+        section_type = config.get("sectionType", "")
+        section_order = config.get("sectionOrder", 0)
+        if section_type == "MULTIPLE_CHOICE":
+            section_configs["part1"] = config
+        elif section_type == "TRUE_FALSE":
+            section_configs["part2"] = config
+        elif section_type == "ESSAY":
+            section_configs["part3"] = config
+
+    # Tính điểm Part 1 (MULTIPLE_CHOICE)
+    if "part1" in section_configs:
+        config = section_configs["part1"]
+        points_per_question = config.get("pointsPerQuestion", 0.25)
+        question_count = config.get("questionCount", 0)
+
+        scores["part1"]["points_per_question"] = points_per_question
+        scores["part1"]["total_questions"] = question_count
+
+        # Đếm câu đúng (không có trong multiple_answers và có trong correct_matches)
+        correct_count = 0
+        for section in correct_answers:
+            if section.get("sectionType") == "MULTIPLE_CHOICE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    question_num = str(question.get("questionNumber", ""))
+
+                    # Kiểm tra câu này có bị multiple answers không
+                    if question_num not in multiple_answers_part1:
+                        # Kiểm tra có đáp án đúng không
+                        student_answer = student_answers_formatted.get("part1", {}).get(question_num, "")
+                        correct_answer = question.get("answer", "")
+
+                        if student_answer.upper() == correct_answer.upper():
+                            correct_count += 1
+
+        scores["part1"]["correct_count"] = correct_count
+        scores["part1"]["score"] = correct_count * points_per_question
+
+    # Tính điểm Part 2 (TRUE_FALSE)
+    if "part2" in section_configs:
+        config = section_configs["part2"]
+        rule = config.get("rule", {})
+        question_count = config.get("questionCount", 0)
+
+        scores["part2"]["rule"] = rule
+        scores["part2"]["total_questions"] = question_count
+
+        # Debug: Xem cấu trúc student_answers_formatted (comment out for production)
+        # print(f"🔍 student_answers_formatted part2: {student_answers_formatted.get('part2', {})}")
+
+        # Tính điểm cho từng câu và lưu chi tiết
+        total_score_part2 = 0.0
+        correct_questions = 0
+        part2_details = []
+
+        for section in correct_answers:
+            if section.get("sectionType") == "TRUE_FALSE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    question_num = str(question.get("questionNumber", ""))
+                    correct_answer_dict = question.get("answer", {})
+
+                    # Kiểm tra câu này có bị multiple answers không
+                    question_has_multiple = any(key.startswith(f"{question_num}_") for key in multiple_answers_part2.keys())
+
+                    if not question_has_multiple:
+                        # Đếm số câu con đúng từ correct_matches
+                        correct_sub_count = 0
+
+                        for sub_part in ["a", "b", "c", "d"]:
+                            # Tìm trong correct_matches xem có circle nào match với pattern này không
+                            # Pattern: part2_{question_num}_{sub_part}_{answer}_{x}_{y}
+                            correct_answer = correct_answer_dict.get(sub_part, "")
+                            normalized_correct = "D" if correct_answer == "Đ" else "S" if correct_answer == "S" else correct_answer
+
+                            # Tìm trong correct_matches
+                            pattern = f"part2_{question_num}_{sub_part}_{normalized_correct}_"
+                            found_match = any(match.startswith(pattern) for match in correct_matches.get("part2", []))
+
+                            # Debug logging (comment out for production)
+                            # print(f"   🔍 Q{question_num}{sub_part}: Looking for pattern '{pattern}' in {correct_matches.get('part2', [])} -> {found_match}")
+
+                            if found_match:
+                                correct_sub_count += 1
+
+                        # Áp dụng rule để tính điểm cho câu này
+                        question_score = rule.get(str(correct_sub_count), 0.0)
+                        total_score_part2 += question_score
+
+                        # Debug logging (comment out for production)
+                        # print(f"🔍 Part2 Question {question_num}: {correct_sub_count}/4 correct, score: {question_score}")
+                        # print(f"   Debug: {debug_info}")
+
+                        # Lưu chi tiết câu này
+                        part2_details.append({
+                            "question": question_num,
+                            "correct_count": correct_sub_count,
+                            "total_sub_questions": 4,
+                            "score": question_score
+                        })
+
+                        if correct_sub_count == 4:  # Câu hoàn toàn đúng
+                            correct_questions += 1
+                    else:
+                        # Câu có multiple answers = 0 điểm
+                        part2_details.append({
+                            "question": question_num,
+                            "correct_count": 0,
+                            "total_sub_questions": 4,
+                            "score": 0.0,
+                            "note": "Multiple answers"
+                        })
+
+        scores["part2"]["correct_count"] = correct_questions
+        scores["part2"]["score"] = total_score_part2
+        scores["part2_details"] = part2_details
+
+    # Tính điểm Part 3 (ESSAY)
+    if "part3" in section_configs:
+        config = section_configs["part3"]
+        points_per_question = config.get("pointsPerQuestion", 0.5)
+        question_count = config.get("questionCount", 0)
+
+        scores["part3"]["points_per_question"] = points_per_question
+        scores["part3"]["total_questions"] = question_count
+
+        # Đếm câu đúng (không có màu vàng/đỏ, chỉ có màu xanh)
+        correct_count = 0
+        for section in correct_answers:
+            if section.get("sectionType") == "ESSAY_CODE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    question_num = str(question.get("questionNumber", ""))
+
+                    # Kiểm tra câu này có vấn đề không (multiple answers hoặc extra answers)
+                    has_issues = (
+                        question_num in multiple_answers_part3.get("multiple_at_position", {}) or
+                        any(answer.startswith(f"part3_{question_num}_") for answer in multiple_answers_part3.get("extra_answers", []))
+                    )
+
+                    if not has_issues:
+                        # Kiểm tra tất cả ký tự có đúng không
+                        correct_answer = str(question.get("answer", ""))
+                        student_answer = student_answers_formatted.get("part3", {}).get(question_num, "")
+
+                        if student_answer == correct_answer:
+                            correct_count += 1
+
+        scores["part3"]["correct_count"] = correct_count
+        scores["part3"]["score"] = correct_count * points_per_question
+
+    # Tính tổng điểm
+    scores["total_score"] = scores["part1"]["score"] + scores["part2"]["score"] + scores["part3"]["score"]
+
+    return scores
 
 
 def create_answer_summary(correct_answers, all_circles: List[str], student_answers: List[str] = None) -> Dict[str, Any]:

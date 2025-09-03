@@ -7,7 +7,7 @@
     {
       "sectionType": "MULTIPLE_CHOICE",
       "sectionOrder": 1,
-      "questionCount": 40,
+      "questionCount": 18,
       "pointsPerQuestion": 0.25
     },
     {
@@ -25,7 +25,7 @@
       "sectionType": "ESSAY",
       "sectionOrder": 3,
       "questionCount": 6,
-      "pointsPerQuestion": 0.5
+      "pointsPerQuestion": 0.25
     }
   ],
   "book_type_id": "377a7a9d-1a43-4d2c-9429-77e80de57343",
@@ -64,29 +64,7 @@
             {"questionNumber": 15, "answer": "A"},
             {"questionNumber": 16, "answer": "C"},
             {"questionNumber": 17, "answer": "C"},
-            {"questionNumber": 18, "answer": "C"},
-            {"questionNumber": 19, "answer": "A"},
-            {"questionNumber": 20, "answer": "B"},
-            {"questionNumber": 21, "answer": "D"},
-            {"questionNumber": 22, "answer": "C"},
-            {"questionNumber": 23, "answer": "A"},
-            {"questionNumber": 24, "answer": "B"},
-            {"questionNumber": 25, "answer": "A"},
-            {"questionNumber": 26, "answer": "C"},
-            {"questionNumber": 27, "answer": "D"},
-            {"questionNumber": 28, "answer": "A"},
-            {"questionNumber": 29, "answer": "D"},
-            {"questionNumber": 30, "answer": "A"},
-            {"questionNumber": 31, "answer": "C"},
-            {"questionNumber": 32, "answer": "D"},
-            {"questionNumber": 33, "answer": "A"},
-            {"questionNumber": 34, "answer": "A"},
-            {"questionNumber": 35, "answer": "D"},
-            {"questionNumber": 36, "answer": "B"},
-            {"questionNumber": 37, "answer": "C"},
-            {"questionNumber": 38, "answer": "C"},
-            {"questionNumber": 39, "answer": "B"},
-            {"questionNumber": 40, "answer": "A"}
+            {"questionNumber": 18, "answer": "C"}     
           ]
         },
         {
@@ -210,29 +188,7 @@
             {"questionNumber": 15, "answer": "C"},
             {"questionNumber": 16, "answer": "D"},
             {"questionNumber": 17, "answer": "A"},
-            {"questionNumber": 18, "answer": "B"},
-            {"questionNumber": 19, "answer": "C"},
-            {"questionNumber": 20, "answer": "D"},
-            {"questionNumber": 21, "answer": "A"},
-            {"questionNumber": 22, "answer": "B"},
-            {"questionNumber": 23, "answer": "C"},
-            {"questionNumber": 24, "answer": "D"},
-            {"questionNumber": 25, "answer": "B"},
-            {"questionNumber": 26, "answer": "A"},
-            {"questionNumber": 27, "answer": "C"},
-            {"questionNumber": 28, "answer": "D"},
-            {"questionNumber": 29, "answer": "A"},
-            {"questionNumber": 30, "answer": "B"},
-            {"questionNumber": 31, "answer": "D"},
-            {"questionNumber": 32, "answer": "C"},
-            {"questionNumber": 33, "answer": "B"},
-            {"questionNumber": 34, "answer": "A"},
-            {"questionNumber": 35, "answer": "C"},
-            {"questionNumber": 36, "answer": "D"},
-            {"questionNumber": 37, "answer": "A"},
-            {"questionNumber": 38, "answer": "B"},
-            {"questionNumber": 39, "answer": "D"},
-            {"questionNumber": 40, "answer": "C"}
+            {"questionNumber": 18, "answer": "B"}
           ]
         },
         {
