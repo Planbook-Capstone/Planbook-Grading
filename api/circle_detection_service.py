@@ -22,6 +22,8 @@ def _process_part3_circles(all_circles, filled_circles, part_number, debug_image
     student_answers = []
     filled_circles_set = set((x, y) for x, y, r in filled_circles)
 
+    # Note: Part 3 filtering is now done during circle detection in _detect_circles_in_roi
+
     # Group circles by approximate column based on x coordinates
     columns = [[] for _ in range(6)]
     base = 200
@@ -341,27 +343,71 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
     # First, sort by Y to group into rows
     sorted_by_y = sorted(all_circles, key=lambda c: c[1])
 
-    rows = []
-    if sorted_by_y:
-        current_row = [sorted_by_y[0]]
-        for i in range(1, len(sorted_by_y)):
-            if abs(sorted_by_y[i][1] - current_row[-1][1]) < 15: # y-threshold reduced from 20 to 15
-                current_row.append(sorted_by_y[i])
-            else:
-                rows.append(sorted(current_row, key=lambda c: c[0]))
-                current_row = [sorted_by_y[i]]
-        rows.append(sorted(current_row, key=lambda c: c[0]))
+    # Try different thresholds to find exactly 4 rows
+    best_rows = None
+    best_threshold = None
 
-    # There should be 4 rows (a, b, c, d)
-    print(f"DEBUG: Part2 detected {len(rows)} rows, expected 4")
-    if len(rows) != 4:
-        # Fallback or error for unexpected row count
-        print(f"DEBUG: Part2 row count mismatch - detected {len(rows)} rows instead of 4")
+    # Try thresholds from 10 to 30 pixels
+    for threshold in range(10, 31, 5):
+        rows = []
+        if sorted_by_y:
+            current_row = [sorted_by_y[0]]
+            for i in range(1, len(sorted_by_y)):
+                if abs(sorted_by_y[i][1] - current_row[-1][1]) < threshold:
+                    current_row.append(sorted_by_y[i])
+                else:
+                    rows.append(sorted(current_row, key=lambda c: c[0]))
+                    current_row = [sorted_by_y[i]]
+            rows.append(sorted(current_row, key=lambda c: c[0]))
+
+        # Check if this threshold gives us exactly 4 rows
+        if len(rows) == 4:
+            best_rows = rows
+            best_threshold = threshold
+            print(f"✅ Found exactly 4 rows with threshold {threshold}")
+            break
+        else:
+            print(f"🔍 Threshold {threshold}: found {len(rows)} rows")
+
+    # If we couldn't find exactly 4 rows, return error
+    if best_rows is None or len(best_rows) != 4:
+        print(f"❌ Part2 error: Could not detect exactly 4 rows")
+        print(f"   Tried thresholds 10-30, but couldn't group circles into 4 rows")
+
+        # Log what we found for debugging
+        threshold = 20  # Use default threshold for error reporting
+        rows = []
+        if sorted_by_y:
+            current_row = [sorted_by_y[0]]
+            for i in range(1, len(sorted_by_y)):
+                if abs(sorted_by_y[i][1] - current_row[-1][1]) < threshold:
+                    current_row.append(sorted_by_y[i])
+                else:
+                    rows.append(sorted(current_row, key=lambda c: c[0]))
+                    current_row = [sorted_by_y[i]]
+            rows.append(sorted(current_row, key=lambda c: c[0]))
+
+        print(f"   With threshold {threshold}, detected {len(rows)} rows:")
         for i, row in enumerate(rows):
-            print(f"  Row {i}: {len(row)} circles")
-        return [], []
+            print(f"     Row {i}: {len(row)} circles")
+            if len(row) > 0:
+                y_coords = [c[1] for c in row]
+                print(f"       Y range: {min(y_coords)} - {max(y_coords)}")
 
-    # Each row contains circles for 8 questions
+        raise ValueError(f"Part 2: Không thể phát hiện đúng 4 hàng. Phát hiện {len(rows)} hàng thay vì 4 hàng. Vui lòng chụp lại ảnh rõ nét hơn.")
+
+    rows = best_rows
+    print(f"✅ Part2 detected exactly 4 rows with threshold {best_threshold}")
+
+    # Log row details for debugging
+    for i, row in enumerate(rows):
+        print(f"  Row {i}: {len(row)} circles")
+        if len(row) > 0:
+            y_coords = [c[1] for c in row]
+            print(f"    Y range: {min(y_coords)} - {max(y_coords)}")
+
+    # Process all 4 rows
+    # Each row should contain circles for 8 questions (16 circles total: 8 questions × 2 answers each)
     for q_idx in range(8):
         question_number = q_idx + 1
         # Each question has 2 circles per row (D and S)
@@ -369,7 +415,7 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
         end_idx = start_idx + 2
 
         for r_idx, row in enumerate(rows):
-            sub_part_label = chr(ord('a') + r_idx)
+            sub_part_label = chr(ord('a') + r_idx)  # a, b, c, d
             if end_idx <= len(row):
                 pair = row[start_idx:end_idx]
                 labels = ['D', 'S']
@@ -387,6 +433,8 @@ def _process_part2_circles(all_circles, filled_circles, part_number, debug_image
                         cv2.circle(debug_image, (x, y), r, color, 2)
                         cv2.putText(debug_image, f"{question_number}{sub_part_label}{answer_label}", (x - 15, y + 5),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+
+    print(f"✅ Part2 processed: {len(output_data)} total labels, {len(student_answers)} filled answers")
     return output_data, student_answers
 
 def _detect_circles_in_roi(image, roi_coords, part_name=None, debug=False):
@@ -454,7 +502,7 @@ def _detect_circles_in_roi(image, roi_coords, part_name=None, debug=False):
     for param2_value in range(18, 27):
         circles = cv2.HoughCircles(
             blurred_roi, cv2.HOUGH_GRADIENT, dp=1, minDist=11,
-            param1=90, param2=param2_value, minRadius=5, maxRadius=20
+            param1=95, param2=param2_value, minRadius=5, maxRadius=20
         )
 
         if circles is None:
@@ -492,7 +540,7 @@ def _detect_circles_in_roi(image, roi_coords, part_name=None, debug=False):
             aspect_ratio = float(w_rect) / h_rect if h_rect > 0 else 0
 
             # Shape validation: Loại bỏ những shape không đủ tròn
-            if circularity < 0.5 or aspect_ratio < 0.5 or aspect_ratio > 1.5:
+            if circularity < 0.7 or aspect_ratio < 0.8 or aspect_ratio > 1.1:
                 continue
 
             # Get the pixels within the circle from the original grayscale ROI
@@ -505,6 +553,40 @@ def _detect_circles_in_roi(image, roi_coords, part_name=None, debug=False):
                     filled_circles.append((x + x_start, y + y_start, r))
 
             all_circles.append((x + x_start, y + y_start, r))
+
+        # Apply Part 3 specific filtering if needed
+        if part_name == 'part3' and all_circles:
+            # Filter out circles that are likely to be header text (like "C" letters)
+            all_y_coords = [y for x, y, r in all_circles]
+            min_y = min(all_y_coords)
+            max_y = max(all_y_coords)
+
+            # Filter out circles in the top 15% of the ROI (likely header area)
+            y_range = max_y - min_y
+            header_threshold = min_y + (y_range * 0.15)
+
+            # Also filter by size - header text circles are often larger than answer circles
+            filtered_all_circles = []
+            filtered_filled_circles = []
+
+            for x, y, r in all_circles:
+                # Skip circles that are too high (in header area) or too large (text)
+                if y > header_threshold and r <= 15:  # Only keep circles with radius <= 15
+                    filtered_all_circles.append((x, y, r))
+                    # Check if this circle was also in filled_circles
+                    if any(abs(x - fx) < 2 and abs(y - fy) < 2 for fx, fy, _ in filled_circles):
+                        # Find the corresponding filled circle
+                        for fx, fy, fr in filled_circles:
+                            if abs(x - fx) < 2 and abs(y - fy) < 2:
+                                filtered_filled_circles.append((fx, fy, fr))
+                                break
+
+            original_count = len(all_circles)
+            all_circles = filtered_all_circles
+            filled_circles = filtered_filled_circles
+
+            if original_count != len(all_circles):
+                print(f"🔧 Part3 filtering during detection: {original_count} -> {len(all_circles)} circles (removed {original_count - len(all_circles)} header/text circles)")
 
         # Check if we found the expected number of circles
         if expected_count is not None and len(all_circles) == expected_count:
