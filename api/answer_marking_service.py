@@ -261,6 +261,40 @@ def check_answer_correctness_part2(question_num: int, sub_part: str, student_ans
     return False
 
 
+def check_answer_correctness_part3(question_num: int, student_answer: str, correct_answers) -> bool:
+    """
+    Kiểm tra tính đúng sai của đáp án Part 3
+
+    Args:
+        question_num: Số câu hỏi
+        student_answer: Đáp án học sinh (ví dụ: "-3,2", "1380")
+        correct_answers: Đáp án đúng
+
+    Returns:
+        bool: True nếu đúng, False nếu sai
+    """
+    if not correct_answers:
+        return False
+
+    # Kiểm tra format mới (List) hay cũ (Dict)
+    if isinstance(correct_answers, list):
+        for section in correct_answers:
+            if section.get("sectionType") == "ESSAY_CODE":
+                questions = section.get("questions", [])
+                for question in questions:
+                    if question.get("questionNumber") == question_num:
+                        correct_answer = str(question.get("answer", ""))
+                        # So sánh trực tiếp chuỗi đáp án
+                        return str(student_answer).strip() == correct_answer.strip()
+    else:
+        # Format cũ
+        part3_answers = correct_answers.get("part3", {})
+        correct_answer = str(part3_answers.get(str(question_num), ""))
+        return str(student_answer).strip() == correct_answer.strip()
+
+    return False
+
+
 def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam_code: str, image_path: str, correct_answers=None) -> Dict[str, Any]:
     """
     Chuyển đổi format đáp án từ format cũ sang format mới theo yêu cầu
@@ -384,10 +418,17 @@ def convert_to_new_format(student_answers: Dict[str, Any], student_id: str, exam
                 # Extract only numeric part from question_num (e.g., "1a" -> "1")
                 numeric_part = ''.join(filter(str.isdigit, str(question_num)))
                 if numeric_part:
-                    questions_part3.append({
+                    question_data = {
                         "questionNumber": int(numeric_part),
                         "answer": str(answer)
-                    })
+                    }
+
+                    # Thêm field isCorrect nếu có correct_answers
+                    if correct_answers:
+                        is_correct = check_answer_correctness_part3(int(numeric_part), str(answer), correct_answers)
+                        question_data["isCorrect"] = is_correct
+
+                    questions_part3.append(question_data)
             except (ValueError, TypeError) as e:
                 print(f"Warning: Skipping invalid question_num '{question_num}' in part3: {e}")
                 continue
